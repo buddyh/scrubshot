@@ -15,6 +15,12 @@ final class RulesTests: XCTestCase {
         XCTAssertEqual(rs.matches(in: "Fix the CMC1A login").map(\.original), ["CMC1A"])
     }
 
+    func testCaseInsensitiveBeyondASCII() throws {
+        let rs = try set([.init(term: "München", replace: "Springfield")])
+        XCTAssertEqual(rs.matches(in: "Office: MÜNCHEN").map(\.original), ["MÜNCHEN"])
+        XCTAssertEqual(Rule.fold("İSTANBUL").utf16.count, "İSTANBUL".utf16.count)
+    }
+
     func testWholeWord() throws {
         let rs = try set([.init(term: "Orbis", wholeWord: true)])
         XCTAssertEqual(rs.matches(in: "the Orbis account").count, 1)

@@ -140,6 +140,12 @@ public struct Rule {
         for i in units.indices {
             switch units[i] {
             case 0x41...0x5A: units[i] += 0x20 // A-Z
+            case 0x80...0xD7FF, 0xE000...0xFFFF:
+                // Unicode lowercase, only when it stays one UTF-16 unit (keeps ranges valid).
+                if let scalar = Unicode.Scalar(units[i]) {
+                    let lower = Array(String(scalar).lowercased().utf16)
+                    if lower.count == 1 { units[i] = lower[0] }
+                }
             default: break
             }
             switch units[i] {
