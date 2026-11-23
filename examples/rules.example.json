@@ -1,0 +1,11 @@
+{
+  "detectors": { "email": true, "url": true },
+  "rules": [
+    { "term": "Globex", "category": "company" },
+    { "terms": ["Project Falcon", "project-falcon"], "category": "product" },
+    { "regex": "globex-[a-z0-9-]+", "category": "repo" },
+    { "term": "Hank Scorpio", "category": "person" },
+    { "term": "GBX", "wholeWord": true, "replace": "ACME" },
+    { "regex": "ticket-(\\d+)", "replace": "ticket-0000" }
+  ]
+}
