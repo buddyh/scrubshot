@@ -200,7 +200,9 @@ public enum Scrubber {
 
     static func wordRange(_ ns: NSString, _ r: NSRange) -> NSRange {
         var s = r.location, e = NSMaxRange(r)
-        let space = CharacterSet.whitespaces
+        // "|" counts as a boundary: OCR often reads a text cursor or a border as "|",
+        // and redrawing it as text would add a glyph that was never there.
+        let space = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "|"))
         func isSpace(_ i: Int) -> Bool {
             guard let u = Unicode.Scalar(ns.character(at: i)) else { return false }
             return space.contains(u)
