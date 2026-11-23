@@ -119,11 +119,18 @@ public struct Rule {
         return out
     }
 
+    /// True only when the email or URL host is exactly a reserved example domain,
+    /// which is what our own fake values use.
     static func isExampleDomain(_ s: String) -> Bool {
-        let l = s.lowercased()
-        return ["example.com", "example.org", "example.net"].contains { d in
-            l.hasSuffix(d) || l.hasSuffix("@" + d) || l.contains("://" + d) || l.contains("." + d) || l.hasPrefix(d)
+        var host = s.lowercased()
+        if let at = host.lastIndex(of: "@") {
+            host = String(host[host.index(after: at)...])
+        } else {
+            if let scheme = host.range(of: "://") { host = String(host[scheme.upperBound...]) }
+            if let end = host.firstIndex(where: { "/?#:".contains($0) }) { host = String(host[..<end]) }
+            if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
         }
+        return ["example.com", "example.org", "example.net"].contains(host)
     }
 
     /// Lowercases ASCII and merges characters OCR often confuses. Keeps UTF-16 length,

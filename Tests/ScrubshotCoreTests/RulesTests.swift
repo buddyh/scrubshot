@@ -52,6 +52,11 @@ final class RulesTests: XCTestCase {
         XCTAssertTrue(m[1].replacement.hasPrefix("https://example.com/"))
         // Our own fake values must not count as leaks.
         XCTAssertEqual(rs.matches(in: "visit https://example.com/atlas").count, 0)
+        XCTAssertEqual(rs.matches(in: "ask avery.gray@example.com").count, 0)
+        // Look-alike hosts are real addresses and must still match.
+        XCTAssertEqual(rs.matches(in: "ask jane@notexample.com").count, 1)
+        XCTAssertEqual(rs.matches(in: "open https://example.com.evil.io/path").count, 1)
+        XCTAssertEqual(rs.matches(in: "mail jane@corp.example.com.evil.io").count, 1)
     }
 
     func testAliasesShareOneFakeValueReshapedPerMatch() throws {
