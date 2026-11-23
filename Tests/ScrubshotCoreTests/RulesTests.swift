@@ -21,6 +21,12 @@ final class RulesTests: XCTestCase {
         XCTAssertEqual(Rule.fold("İSTANBUL").utf16.count, "İSTANBUL".utf16.count)
     }
 
+    func testRedrawSpanStopsAtOCRBars() {
+        let ns = "[7, octo/follow-up-1234|" as NSString
+        let r = Scrubber.wordRange(ns, NSRange(location: 4, length: 5))
+        XCTAssertEqual(ns.substring(with: r), "octo/follow-up-1234")
+    }
+
     func testWholeWord() throws {
         let rs = try set([.init(term: "Orbis", wholeWord: true)])
         XCTAssertEqual(rs.matches(in: "the Orbis account").count, 1)
