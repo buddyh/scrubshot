@@ -11,8 +11,8 @@ final class RulesTests: XCTestCase {
         let rs = try set([.init(term: "GLXIA", replace: "ACME")])
         XCTAssertEqual(rs.matches(in: "Fix the glxia login").map(\.original), ["glxia"])
         // OCR often reads I as l or 1.
-        XCTAssertEqual(rs.matches(in: "Fix the CMClA login").map(\.original), ["CMClA"])
-        XCTAssertEqual(rs.matches(in: "Fix the CMC1A login").map(\.original), ["CMC1A"])
+        XCTAssertEqual(rs.matches(in: "Fix the GLXlA login").map(\.original), ["GLXlA"])
+        XCTAssertEqual(rs.matches(in: "Fix the GLX1A login").map(\.original), ["GLX1A"])
     }
 
     func testCaseInsensitiveBeyondASCII() throws {
