@@ -45,6 +45,8 @@ final class ServeApp: @unchecked Sendable {
     let rules: RuleSet
     let sources: [String]
     var port: Int
+    /// Extra Host header names to accept, such as a .lab name a local reverse proxy forwards.
+    var hostAliases: [String] = []
 
     private let lock = NSLock()
     private let jobs = DispatchQueue(label: "scrubshot.jobs")   // serial: scrubs and audits run one at a time
@@ -244,9 +246,16 @@ final class ServeApp: @unchecked Sendable {
 
     // MARK: routing
 
+    /// Loopback on our port, or a configured alias with or without a port.
+    func allowedHost(_ host: String) -> Bool {
+        if host == "127.0.0.1:\(port)" || host == "localhost:\(port)" { return true }
+        let name = host.split(separator: ":", maxSplits: 1).first.map(String.init) ?? host
+        return hostAliases.contains(name)
+    }
+
     func handle(_ req: HTTPRequest) -> HTTPResponse {
         let host = (req.headers["host"] ?? "").lowercased()
-        guard host == "127.0.0.1:\(port)" || host == "localhost:\(port)" else { return fail(403, "bad Host header") }
+        guard allowedHost(host) else { return fail(403, "bad Host header") }
         if req.method == "POST" && req.headers["x-scrubshot"] != "1" { return fail(403, "missing X-Scrubshot header") }
         do {
             switch (req.method, req.path) {
@@ -324,6 +333,7 @@ func serveEncode<T: Encodable>(_ v: T) throws -> String {
 func runServe(_ args: Args) throws -> Int32 {
     var port = 7317
     var openBrowser = false
+    var hostAliases: [String] = []
     var rest: [String] = []
     while let a = args.next() {
         switch a {
@@ -331,6 +341,10 @@ func runServe(_ args: Args) throws -> Int32 {
             guard let p = Int(try args.value(a)), p >= 0, p <= 65535 else { throw CLIError(message: "--port must be 0...65535") }
             port = p
         case "--open": openBrowser = true
+        case "--host-alias":
+            let h = try args.value(a).lowercased()
+            guard !h.isEmpty, !h.contains(":"), !h.contains("/"), h != "*" else { throw CLIError(message: "--host-alias wants a bare host name like scrubshot.internal") }
+            hostAliases.append(h)
         default: rest.append(a)
         }
     }
@@ -354,10 +368,12 @@ func runServe(_ args: Args) throws -> Int32 {
     if c.urls == true { sources.append("--urls") }
 
     let app = ServeApp(root: root, config: c, rules: rules, sources: sources, port: port)
+    app.hostAliases = hostAliases
     let server = LocalHTTPServer(port: port, maxBody: maxRequestBody) { app.handle($0) }
     do { app.port = try server.start() } catch let e as LocalHTTPServer.StartError { throw CLIError(message: e.description) }
     let url = "http://127.0.0.1:\(app.port)"
     print("scrubshot: serving \(root) at \(url)")
+    for h in hostAliases { print("scrubshot: also accepting Host \(h) (from a local reverse proxy)") }
     fflush(stdout)
     if openBrowser {
         let p = Process()
