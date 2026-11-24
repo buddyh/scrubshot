@@ -33,12 +33,11 @@ public enum Pseudonym {
     static func phrase(_ original: String, list: [String], key: String) -> String {
         let words = original.split(whereSeparator: { $0 == " " })
         if words.count <= 1 {
-            return applyCase(of: original, to: pick(list, near: original.count, key: key))
+            return pickByWidth(list, like: original, key: key)
         }
         var out: [String] = []
         for (i, w) in words.enumerated() {
-            let p = pick(list, near: w.count, key: key + "#\(i)", avoid: out)
-            out.append(applyCase(of: String(w), to: p))
+            out.append(pickByWidth(list, like: String(w), key: key + "#\(i)", avoid: out))
         }
         return out.joined(separator: " ")
     }
@@ -46,11 +45,11 @@ public enum Pseudonym {
     static func person(_ original: String, _ key: String) -> String {
         let words = original.split(separator: " ")
         if words.count <= 1 {
-            return applyCase(of: original, to: pick(Words.firstNames, near: original.count, key: key))
+            return pickByWidth(Words.firstNames, like: original, key: key)
         }
-        let first = pick(Words.firstNames, near: words.first!.count, key: key + "#first")
-        let last = pick(Words.lastNames, near: words.last!.count, key: key + "#last")
-        return applyCase(of: String(words.first!), to: first) + " " + applyCase(of: String(words.last!), to: last)
+        let first = pickByWidth(Words.firstNames, like: String(words.first!), key: key + "#first")
+        let last = pickByWidth(Words.lastNames, like: String(words.last!), key: key + "#last")
+        return first + " " + last
     }
 
     static func repo(_ original: String, _ key: String) -> String {
@@ -62,24 +61,21 @@ public enum Pseudonym {
         let segments = original.split(separator: "-", omittingEmptySubsequences: false)
         var out: [String] = []
         for (i, s) in segments.prefix(5).enumerated() {
-            out.append(pick(Words.repo, near: max(2, s.count), key: key + "#\(i)", avoid: out))
+            out.append(pickByWidth(Words.repo, like: String(s), key: key + "#\(i)", avoid: out))
         }
         return out.joined(separator: "-")
     }
 
-    /// Fake address about as long as the original, always at example.com.
+    /// Fake address with each name part about as wide as the original's, always at example.com.
     static func email(_ original: String, _ key: String) -> String {
         let local = original.split(separator: "@").first.map(String.init) ?? original
         let parts = local.split(whereSeparator: { ".-_".contains($0) })
-        // Budget the local part so the whole address stays near the original length.
-        let budget = max(3, original.count - "@example.com".count)
         if parts.count >= 2 {
-            let f = max(2, budget * parts[0].count / max(1, parts[0].count + parts[1].count))
-            let first = pick(Words.firstNames, near: f, key: key + "#first").lowercased()
-            let last = pick(Words.lastNames, near: max(2, budget - f - 1), key: key + "#last").lowercased()
+            let first = pickByWidth(Words.firstNames, like: String(parts[0]).lowercased(), key: key + "#first").lowercased()
+            let last = pickByWidth(Words.lastNames, like: String(parts[1]).lowercased(), key: key + "#last").lowercased()
             return "\(first).\(last)@example.com"
         }
-        return pick(Words.firstNames, near: budget, key: key + "#first").lowercased() + "@example.com"
+        return pickByWidth(Words.firstNames, like: local.lowercased(), key: key + "#first").lowercased() + "@example.com"
     }
 
     static func acronym(_ original: String, _ key: String) -> String {
@@ -103,6 +99,47 @@ public enum Pseudonym {
     }
 
     // MARK: helpers
+
+    /// Advance widths of ASCII 32...126 in the macOS system font (SF Pro) at 13pt, measured once
+    /// with CoreText and fixed here so auto picks don't depend on the fonts a machine has.
+    /// Widths scale roughly with size and across similar sans fonts, so one table keeps the
+    /// choice independent of the image.
+    static let referenceAdvances: [Double] = [
+        3.58, 3.97, 6.13, 8.11, 8.11, 11.95, 9.17, 3.78, 4.89, 4.89, 6.06, 8.11,
+        3.78, 6.06, 3.78, 3.88, 8.11, 5.95, 7.77, 8.07, 8.29, 7.96, 8.20, 7.33,
+        8.23, 8.20, 3.78, 3.78, 8.11, 8.11, 8.11, 6.59, 11.86, 8.68, 8.47, 9.23,
+        9.37, 7.67, 7.36, 9.63, 9.57, 3.40, 6.92, 8.49, 7.31, 11.29, 9.57, 9.95,
+        8.18, 9.95, 8.42, 8.21, 8.16, 9.51, 8.68, 12.50, 8.75, 8.44, 8.52, 4.89,
+        3.88, 4.89, 8.11, 7.51, 6.42, 7.10, 7.91, 7.20, 7.91, 7.35, 4.63, 7.85,
+        7.57, 3.14, 3.13, 6.98, 3.21, 11.24, 7.51, 7.60, 7.86, 7.85, 4.88, 6.73,
+        4.65, 7.51, 6.97, 9.99, 6.74, 6.98, 6.93, 4.89, 3.29, 4.89, 8.11
+    ]
+
+    /// Approximate rendered width of `text` in the reference font, in points (no kerning).
+    /// Characters outside printable ASCII count as an average lowercase letter.
+    static func referenceWidth(_ text: String) -> Double {
+        text.unicodeScalars.reduce(0) { sum, u in
+            let v = Int(u.value)
+            return sum + ((32...126).contains(v) ? referenceAdvances[v - 32] : 7.2)
+        }
+    }
+
+    /// Picks a word from `list` that renders about as wide as `original` (after copying its casing).
+    /// Takes the few nearest by width and chooses among them by hash, so the same key always
+    /// gives the same word without every similar-width original mapping to one word.
+    static func pickByWidth(_ list: [String], like original: String, key: String, avoid: [String] = [], nearest k: Int = 3) -> String {
+        let target = referenceWidth(original)
+        let avoided = Set(avoid.map { $0.lowercased() })
+        var ranked: [(delta: Double, index: Int, word: String)] = []
+        for (i, w) in list.enumerated() where !avoided.contains(w.lowercased()) {
+            let cased = applyCase(of: original, to: w)
+            ranked.append((abs(referenceWidth(cased) - target), i, cased))
+        }
+        if ranked.isEmpty { return applyCase(of: original, to: list[Int(fnv1a(key) % UInt64(list.count))]) }
+        ranked.sort { $0.delta != $1.delta ? $0.delta < $1.delta : $0.index < $1.index }
+        let top = ranked.prefix(k)
+        return top[top.startIndex + Int(fnv1a(key) % UInt64(top.count))].word
+    }
 
     /// Picks from `list` a word whose length is close to `target`, by hash.
     static func pick(_ list: [String], near target: Int, key: String, avoid: [String] = []) -> String {
