@@ -108,6 +108,17 @@ final class ServeApp: @unchecked Sendable {
     private var errors: [String: String] = [:]
     private var auditCache: [String: (key: String, json: String)] = [:]
     let thumbs = ThumbCache()
+    static let stateTTL = 0.25
+    private let stateLock = NSLock()   // guards the caches below; held while computing state
+    private var generation = 0          // bumped (under `lock`) when job state changes, to drop the memo
+    private var reportCache: [String: (sig: String, report: FileResult?)] = [:]
+    private var itemCache: [String: CachedItem] = [:]
+    private var stateMemo: (at: Date, gen: Int, body: String, etag: String)?
+    private let rulesJSON: String
+    private let versionJSON: String
+    private let workspaceJSON: String
+    /// The workspace folder with symlinks resolved, computed once.
+    private let rootReal: String
 
     init(root: String, config: Config, rules: RuleSet, sources: [String], port: Int) {
         self.root = root
@@ -115,6 +126,10 @@ final class ServeApp: @unchecked Sendable {
         self.rules = rules
         self.sources = sources
         self.port = port
+        self.rootReal = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        self.rulesJSON = (try? serveEncode(ServeRules(count: rules.rules.count, sources: sources))) ?? "{}"
+        self.versionJSON = (try? serveEncode(version)) ?? "\"\""
+        self.workspaceJSON = (try? serveEncode(root)) ?? "\"\""
     }
 
     // MARK: names and files
@@ -146,7 +161,7 @@ final class ServeApp: @unchecked Sendable {
     /// True when the file is a regular file that really lives in the workspace (symlinks may not leave it).
     func insideWorkspace(_ name: String) -> Bool {
         let real = URL(fileURLWithPath: path(name)).resolvingSymlinksInPath().deletingLastPathComponent().path
-        return real == URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        return real == rootReal
     }
 
     func outputName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil) as NSString).lastPathComponent }
@@ -155,37 +170,111 @@ final class ServeApp: @unchecked Sendable {
 
     // MARK: state
 
-    func items() -> [ServeItem] {
-        let names = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).filter { n in
-            guard isInputName(n), !n.hasPrefix("."), insideWorkspace(n) else { return false }
-            var isDir: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path(n), isDirectory: &isDir) && !isDir.boolValue
-        }
-        lock.lock()
-        let queuedNow = queued, runningNow = running, errorsNow = errors
-        lock.unlock()
-        let out: [ServeItem] = names.map { name in
-            let outName = outputName(name), unsafe = unsafeName(name), rep = reportName(name)
-            var report: FileResult?
-            if let data = FileManager.default.contents(atPath: path(rep)) { report = try? JSONDecoder().decode(FileResult.self, from: data) }
-            var status = report?.status ?? (errorsNow[name] != nil ? "error" : "new")
-            if runningNow == name { status = "running" } else if queuedNow.contains(name) { status = "queued" }
-            let updated = [name, outName, rep].compactMap { mtimeMs($0) }.max() ?? 0
-            return ServeItem(name: name, status: status, output: exists(outName) ? outName : nil,
-                             unsafe: exists(unsafe) ? unsafe : nil, report: report, updated: updated, error: errorsNow[name])
-        }
-        // Read each input's mtime once; stat calls inside the comparator stall on big folders.
-        let keyed = out.map { ($0, mtimeMs($0.name) ?? 0) }
-        return keyed.sorted { a, b in a.1 != b.1 ? a.1 > b.1 : a.0.name < b.0.name }.map(\.0)
+    /// Result of `stat` (follows symlinks): modification time in ms, size, and whether it is a directory.
+    struct FileInfo { let mtimeMs: Int64; let size: Int64; let isDir: Bool }
+
+    static func fileInfo(_ path: String) -> FileInfo? {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return nil }
+        let ms = Int64(st.st_mtimespec.tv_sec) * 1000 + Int64(st.st_mtimespec.tv_nsec) / 1_000_000
+        return FileInfo(mtimeMs: ms, size: Int64(st.st_size), isDir: (st.st_mode & S_IFMT) == S_IFDIR)
     }
 
-    func state() throws -> String {
+    static func isSymlink(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    /// Names of the entries in the workspace folder.
+    func listNames() throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: root)
+    }
+
+    private struct CachedItem { let sig: String; let json: String }
+
+    /// Items as (name, input mtime, encoded JSON). Reports and encoded items are cached by file times, so a
+    /// poll that changes nothing does one directory listing and a few stat calls per file.
+    private func itemFragments() throws -> [(name: String, mtime: Int64, status: String, json: String)] {
+        let all = try listNames()
+        let present = Set(all)
         lock.lock()
-        let busy = running != nil || !queued.isEmpty || auditsPending > 0
+        let queuedNow = Set(queued), runningNow = running, errorsNow = errors
         lock.unlock()
-        return try serveEncode(ServeState(workspace: root, version: version,
-                                          rules: ServeRules(count: rules.rules.count, sources: sources),
-                                          busy: busy, items: items()))
+
+        var fragments: [(name: String, mtime: Int64, status: String, json: String)] = []
+        fragments.reserveCapacity(all.count)
+        var keep = Set<String>()
+        for name in all where isInputName(name) && !name.hasPrefix(".") {
+            let inPath = path(name)
+            // Only a symlink can point out of the workspace, so only it pays for path resolution.
+            if Self.isSymlink(inPath) {
+                guard insideWorkspace(name) else { continue }
+            }
+            guard let inInfo = Self.fileInfo(inPath), !inInfo.isDir else { continue }
+            keep.insert(name)
+
+            let stem = (name as NSString).deletingPathExtension
+            let outName = stem + "-scrubbed.png", unsafe = stem + "-scrubbed-UNSAFE.png", rep = stem + "-scrubbed.report.json"
+            let outInfo = present.contains(outName) ? Self.fileInfo(path(outName)) : nil
+            let unsafeInfo = present.contains(unsafe) ? Self.fileInfo(path(unsafe)) : nil
+            let repInfo = present.contains(rep) ? Self.fileInfo(path(rep)) : nil
+
+            var report: FileResult?
+            if let repInfo {
+                let rsig = "\(repInfo.mtimeMs)|\(repInfo.size)"
+                if let hit = reportCache[rep], hit.sig == rsig { report = hit.report }
+                else {
+                    if let data = FileManager.default.contents(atPath: path(rep)) { report = try? JSONDecoder().decode(FileResult.self, from: data) }
+                    reportCache[rep] = (rsig, report)
+                }
+            } else {
+                reportCache[rep] = nil
+            }
+            var status = report?.status ?? (errorsNow[name] != nil ? "error" : "new")
+            if runningNow == name { status = "running" } else if queuedNow.contains(name) { status = "queued" }
+            let updated = [inInfo.mtimeMs, outInfo?.mtimeMs ?? 0, repInfo?.mtimeMs ?? 0].max() ?? 0
+            let sig = [status, "\(updated)", "\(inInfo.mtimeMs)", outInfo == nil ? "-" : "o", unsafeInfo == nil ? "-" : "u",
+                       "\(repInfo?.mtimeMs ?? -1)|\(repInfo?.size ?? -1)", errorsNow[name] ?? ""].joined(separator: "\u{1f}")
+            if let hit = itemCache[name], hit.sig == sig {
+                fragments.append((name, inInfo.mtimeMs, status, hit.json))
+            } else {
+                let item = ServeItem(name: name, status: status, output: outInfo == nil ? nil : outName,
+                                     unsafe: unsafeInfo == nil ? nil : unsafe, report: report, updated: updated, error: errorsNow[name])
+                let json = try serveEncode(item)
+                itemCache[name] = CachedItem(sig: sig, json: json)
+                fragments.append((name, inInfo.mtimeMs, status, json))
+            }
+        }
+        if itemCache.count > keep.count { itemCache = itemCache.filter { keep.contains($0.key) } }
+        if reportCache.count > keep.count {
+            let reps = Set(keep.map { (($0 as NSString).deletingPathExtension) + "-scrubbed.report.json" })
+            reportCache = reportCache.filter { reps.contains($0.key) }
+        }
+        return fragments.sorted { a, b in a.mtime != b.mtime ? a.mtime > b.mtime : a.name < b.name }
+    }
+
+    /// Names of inputs with status "new".
+    func newNames() throws -> [String] {
+        try stateLock.withLock { try itemFragments().filter { $0.status == "new" }.map(\.name) }
+    }
+
+    /// The state JSON and its ETag. Computed at most once per `stateTTL` unless a job changed something.
+    func state() throws -> (body: String, etag: String) {
+        try stateLock.withLock {
+            lock.lock()
+            let gen = generation
+            lock.unlock()
+            if let m = stateMemo, m.gen == gen, Date().timeIntervalSince(m.at) < Self.stateTTL { return (m.body, m.etag) }
+            lock.lock()
+            let busy = running != nil || !queued.isEmpty || auditsPending > 0
+            lock.unlock()
+            let frags = try itemFragments()
+            let body = "{\"busy\":\(busy),\"items\":[" + frags.map(\.json).joined(separator: ",") + "],\"rules\":" + rulesJSON
+                + ",\"version\":" + versionJSON + ",\"workspace\":" + workspaceJSON + "}"
+            let etag = "\"" + fnv1a(body) + "\""
+            stateMemo = (Date(), gen, body, etag)
+            return (body, etag)
+        }
     }
 
     // MARK: jobs
@@ -196,6 +285,7 @@ final class ServeApp: @unchecked Sendable {
         if queued.contains(name) || running == name { lock.unlock(); return }
         queued.append(name)
         errors[name] = nil
+        generation += 1
         lock.unlock()
         jobs.async { self.runScrub(name) }
     }
@@ -204,8 +294,9 @@ final class ServeApp: @unchecked Sendable {
         lock.lock()
         queued.removeAll { $0 == name }
         running = name
+        generation += 1
         lock.unlock()
-        defer { lock.lock(); running = nil; lock.unlock() }
+        defer { lock.lock(); running = nil; generation += 1; lock.unlock() }
 
         let input = path(name)
         guard isInputName(name), exists(name) else { setError(name, "input file is gone"); return }
@@ -232,7 +323,7 @@ final class ServeApp: @unchecked Sendable {
     }
 
     private func setError(_ name: String, _ message: String) {
-        lock.lock(); errors[name] = message; lock.unlock()
+        lock.lock(); errors[name] = message; generation += 1; lock.unlock()
     }
 
     /// Audit one input on the job queue, cached by (name, size, mtime). Blocks the calling thread.
@@ -242,6 +333,7 @@ final class ServeApp: @unchecked Sendable {
         lock.lock()
         if let hit = auditCache[name], hit.key == key { lock.unlock(); return hit.json }
         auditsPending += 1
+        generation += 1
         lock.unlock()
 
         final class Box { var value: Result<String, Error> = .failure(CLIError(message: "audit did not run")) }
@@ -261,7 +353,7 @@ final class ServeApp: @unchecked Sendable {
                     self.lock.lock(); self.auditCache[name] = (key, json); self.lock.unlock()
                 }
             }
-            self.lock.lock(); self.auditsPending -= 1; self.lock.unlock()
+            self.lock.lock(); self.auditsPending -= 1; self.generation += 1; self.lock.unlock()
             done.signal()
         }
         done.wait()
@@ -327,7 +419,12 @@ final class ServeApp: @unchecked Sendable {
             case ("GET", "/"):
                 return .text(webPageHTML, contentType: "text/html; charset=utf-8")
             case ("GET", "/api/state"):
-                return noStore(.json(try state()))
+                let st = try state()
+                let since = req.query["since"] ?? req.headers["if-none-match"]?.replacingOccurrences(of: "\"", with: "")
+                var r = HTTPResponse.json(st.body)
+                if let since, "\"" + since.replacingOccurrences(of: "\"", with: "") + "\"" == st.etag { r = HTTPResponse(status: 304) }
+                r.headers["ETag"] = st.etag
+                return noStore(r)
             case ("GET", "/api/image"):
                 guard let name = validName(req.query["name"]) else { return fail(400, "bad name") }
                 guard isImageName(name), exists(name), insideWorkspace(name),
@@ -362,7 +459,7 @@ final class ServeApp: @unchecked Sendable {
                     guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
                     names = [name]
                 } else {
-                    names = items().filter { $0.status == "new" }.map(\.name)
+                    names = try newNames()
                 }
                 for n in names { enqueueScrub(n) }
                 return .json(try serveEncode(["queued": names]))
@@ -398,6 +495,13 @@ final class ServeApp: @unchecked Sendable {
         default: return "application/octet-stream"
         }
     }
+}
+
+/// 64-bit FNV-1a as hex; a cheap content tag for ETags.
+func fnv1a(_ s: String) -> String {
+    var h: UInt64 = 0xcbf29ce484222325
+    for b in s.utf8 { h ^= UInt64(b); h = h &* 0x100000001b3 }
+    return String(h, radix: 16)
 }
 
 /// Compact JSON with sorted keys.
