@@ -113,7 +113,7 @@ final class ServeApp: @unchecked Sendable {
             let outName = outputName(name), unsafe = unsafeName(name), rep = reportName(name)
             var report: FileResult?
             if let data = FileManager.default.contents(atPath: path(rep)) { report = try? JSONDecoder().decode(FileResult.self, from: data) }
-            var status = report?.status ?? "new"
+            var status = report?.status ?? (errorsNow[name] != nil ? "error" : "new")
             if runningNow == name { status = "running" } else if queuedNow.contains(name) { status = "queued" }
             let updated = [name, outName, rep].compactMap { mtimeMs($0) }.max() ?? 0
             return ServeItem(name: name, status: status, output: exists(outName) ? outName : nil,
