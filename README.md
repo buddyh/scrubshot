@@ -109,6 +109,33 @@ consistent names across a series. The loop:
 skill for this loop (`make install-skill`). The tool stays local, but text the
 agent reads from `audit` goes wherever that agent's model runs.
 
+## Web UI
+
+The CLI is the main interface; the web UI is for when you want eyes on a batch.
+
+```sh
+scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
+```
+
+![scrubshot serve: a batch of synthetic screenshots, before and after](docs/web-ui.png)
+
+- It shows one folder. Every screenshot in it is a row with its status (new,
+  queued, running, ok, leak, error). Drop images on the page to add and scrub them.
+  "Scrub new" runs the rest.
+- **Side by side** and **Slider** compare before and after. "Show edits" outlines
+  every redrawn box, and leaks are drawn in red.
+- **OCR** draws what Vision read over the original. Hover a box for its text,
+  confidence and the rule it matched.
+- The details panel lists each replacement with its font, size, width delta and
+  fit error.
+- Agents keep using the CLI with `--report` in the same folder. The page polls,
+  so their runs show up as they finish.
+
+The server listens on 127.0.0.1 only and rejects other Host headers. Writes need
+an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
+same rules and options as `scrub`, and the same fail-closed check: a leak writes no
+output.
+
 ## How it works
 
 1. **OCR.** Vision `VNRecognizeTextRequest`, accurate level, language correction

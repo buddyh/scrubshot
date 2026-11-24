@@ -69,3 +69,5 @@ and do not copy it into files inside repos.
 - Small 1x text OCRs better with `--ocr-scale 2`.
 - Text over photos or gradients gets a blended fill and a warning; check it by eye.
 - Exit codes: 0 ok, 1 error, 2 leak check failed.
+- If the user wants to watch or review a batch, run `scrubshot serve <folder> --open`
+  (same rule options). Runs you do with `--report` in that folder show up live.
