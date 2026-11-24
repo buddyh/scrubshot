@@ -121,10 +121,9 @@ final class ServeApp: @unchecked Sendable {
             return ServeItem(name: name, status: status, output: exists(outName) ? outName : nil,
                              unsafe: exists(unsafe) ? unsafe : nil, report: report, updated: updated, error: errorsNow[name])
         }
-        return out.sorted { a, b in
-            let ma = mtimeMs(a.name) ?? 0, mb = mtimeMs(b.name) ?? 0
-            return ma != mb ? ma > mb : a.name < b.name
-        }
+        // Read each input's mtime once; stat calls inside the comparator stall on big folders.
+        let keyed = out.map { ($0, mtimeMs($0.name) ?? 0) }
+        return keyed.sorted { a, b in a.1 != b.1 ? a.1 > b.1 : a.0.name < b.0.name }.map(\.0)
     }
 
     func state() throws -> String {
