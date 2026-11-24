@@ -187,3 +187,7 @@ make test       # unit tests plus synthetic screenshots (light, dark, tinted at 
 make fixtures   # rewrite Tests/Fixtures/*.png
 SCRUBSHOT_DEBUG=1 scrubshot shot.png   # print font-fit details per edit
 ```
+
+## License
+
+scrubshot is released under the [MIT License](LICENSE).
