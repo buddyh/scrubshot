@@ -9,6 +9,7 @@ scrubshot \(version) - replace sensitive text in screenshots, locally
 USAGE
   scrubshot <image>... [options]          scrub images, write <name>-scrubbed.png
   scrubshot audit <image> [options]       list every text span OCR finds
+  scrubshot serve [folder] [options]      local web UI for a folder of screenshots
   scrubshot rules-path                    print the default rules file path
 
 SCRUB OPTIONS
@@ -30,6 +31,12 @@ SCRUB OPTIONS
 
 AUDIT OPTIONS
   --json, --ocr-scale, and the rule options above (matches are marked).
+
+SERVE OPTIONS
+      --port <n>          port on 127.0.0.1 (default 7317; 0 picks a free port)
+      --open              open the page in the default browser
+  folder defaults to the current directory. The rule options above apply.
+  Open http://127.0.0.1:<port>; drop in screenshots, review, copy. Ctrl-C stops it.
 
 EXIT CODES
   0 ok   1 error   2 leak check failed (no output written)
@@ -294,6 +301,9 @@ do {
     case "audit":
         _ = args.next()
         exit(try audit(try parse(args)))
+    case "serve":
+        _ = args.next()
+        exit(try runServe(args))
     case "scrub":
         _ = args.next()
         exit(try scrub(try parse(args)))
