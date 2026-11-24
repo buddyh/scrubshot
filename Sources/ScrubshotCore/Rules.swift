@@ -15,14 +15,48 @@ public struct RulesFile: Codable {
         /// Literal replacement text, or "auto" (the default) for a stable fake value.
         /// Regex rules may use $1-style group references.
         public var replace: String?
+        /// Set when the file gives `"replace": [..]`. scrubshot picks the one whose drawn
+        /// width best matches the original, once per rule. `replace` is nil then.
+        public var candidates: [String]?
         public var category: Category?
         public var wholeWord: Bool?
         public var caseSensitive: Bool?
 
         public init(term: String? = nil, terms: [String]? = nil, regex: String? = nil, replace: String? = nil,
+                    candidates: [String]? = nil,
                     category: Category? = nil, wholeWord: Bool? = nil, caseSensitive: Bool? = nil) {
             self.term = term; self.terms = terms; self.regex = regex; self.replace = replace
+            self.candidates = candidates
             self.category = category; self.wholeWord = wholeWord; self.caseSensitive = caseSensitive
+        }
+
+        enum CodingKeys: String, CodingKey { case term, terms, regex, replace, category, wholeWord, caseSensitive }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            term = try c.decodeIfPresent(String.self, forKey: .term)
+            terms = try c.decodeIfPresent([String].self, forKey: .terms)
+            regex = try c.decodeIfPresent(String.self, forKey: .regex)
+            if let list = try? c.decodeIfPresent([String].self, forKey: .replace) {
+                candidates = list
+                replace = nil
+            } else {
+                replace = try c.decodeIfPresent(String.self, forKey: .replace)
+            }
+            category = try c.decodeIfPresent(Category.self, forKey: .category)
+            wholeWord = try c.decodeIfPresent(Bool.self, forKey: .wholeWord)
+            caseSensitive = try c.decodeIfPresent(Bool.self, forKey: .caseSensitive)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(term, forKey: .term)
+            try c.encodeIfPresent(terms, forKey: .terms)
+            try c.encodeIfPresent(regex, forKey: .regex)
+            if let candidates { try c.encode(candidates, forKey: .replace) } else { try c.encodeIfPresent(replace, forKey: .replace) }
+            try c.encodeIfPresent(category, forKey: .category)
+            try c.encodeIfPresent(wholeWord, forKey: .wholeWord)
+            try c.encodeIfPresent(caseSensitive, forKey: .caseSensitive)
         }
     }
 
@@ -48,13 +82,15 @@ public struct RulesFile: Codable {
 public struct RuleMatch: Equatable {
     public let range: NSRange
     public let original: String
-    public let replacement: String
+    public var replacement: String
     public let rule: String
+    /// All candidate texts when the rule has a candidate list; `replacement` is the first.
+    public var candidates: [String]? = nil
 }
 
 public struct Rule {
     public enum Kind { case literal([String]), regex(NSRegularExpression), detector(String, NSRegularExpression) }
-    public enum Replacement { case auto(Category), text(String) }
+    public enum Replacement { case auto(Category), text(String), candidates([String]) }
 
     public let id: String
     public let kind: Kind
@@ -98,13 +134,18 @@ public struct Rule {
             // Skip the reserved example domains our own fake values use.
             if case .detector = kind, Rule.isExampleDomain(original) { continue }
             let replacement: String
+            var candidates: [String]?
+            func expand(_ t: String) -> String {
+                if case .regex = kind { return compiled.replacementString(for: m, in: line, offset: 0, template: t) }
+                return t
+            }
             switch self.replacement {
             case .text(let t):
-                if case .regex = kind {
-                    replacement = compiled.replacementString(for: m, in: line, offset: 0, template: t)
-                } else {
-                    replacement = t
-                }
+                replacement = expand(t)
+            case .candidates(let list):
+                let all = list.map(expand)
+                candidates = all
+                replacement = all[0]
             case .auto(let cat):
                 if case .literal(let terms) = kind, let canon = terms.first {
                     // Aliases share the fake value of the first term, reshaped to each match.
@@ -114,7 +155,7 @@ public struct Rule {
                     replacement = Pseudonym.make(for: original, category: cat, seed: Rule.fold(original))
                 }
             }
-            out.append(RuleMatch(range: m.range, original: original, replacement: replacement, rule: id))
+            out.append(RuleMatch(range: m.range, original: original, replacement: replacement, rule: id, candidates: candidates))
         }
         return out
     }
@@ -199,7 +240,13 @@ public struct RuleSet {
 
     public static func rule(from s: RulesFile.Spec, id: String) throws -> Rule {
         let replacement: Rule.Replacement
-        if let r = s.replace, r != "auto" { replacement = .text(r) } else { replacement = .auto(s.category ?? .word) }
+        if let list = s.candidates {
+            if s.replace != nil { throw ScrubError.rules("\(id): give replace as text or as a list, not both") }
+            guard !list.isEmpty, list.allSatisfy({ !$0.isEmpty && $0 != "auto" }) else {
+                throw ScrubError.rules("\(id): replace list needs one or more non-empty texts (not \"auto\")")
+            }
+            replacement = .candidates(list)
+        } else if let r = s.replace, r != "auto" { replacement = .text(r) } else { replacement = .auto(s.category ?? .word) }
         let cs = s.caseSensitive ?? false
         if let re = s.regex {
             if s.term != nil || s.terms != nil { throw ScrubError.rules("\(id): use either regex or term(s), not both") }
