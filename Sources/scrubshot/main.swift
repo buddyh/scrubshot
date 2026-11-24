@@ -14,7 +14,9 @@ USAGE
 
 SCRUB OPTIONS
   -o, --output <path>     output file (one input only). Never the input itself.
-  -r, --rules <file>      rules JSON (repeatable). Default: ~/.config/scrubshot/rules.json
+  -r, --rules <file>      rules JSON (repeatable). Use - to read it from stdin.
+                          Default: ~/.config/scrubshot/rules.json
+      --rules-json <json> rules JSON given inline (repeatable)
       --no-default-rules  skip the default rules file
       --replace <a=b>     replace literal text a with b (repeatable)
       --term <text>       replace text with a stable fake value (repeatable).
@@ -61,6 +63,7 @@ struct Config {
     var inputs: [String] = []
     var output: String?
     var rulesFiles: [String] = []
+    var inlineRules: [String] = []
     var defaultRules = true
     var replaces: [(String, String)] = []
     var terms: [(String, ScrubshotCore.Category)] = []
@@ -83,6 +86,7 @@ func parse(_ args: Args) throws -> Config {
         switch a {
         case "-o", "--output": c.output = try args.value(a)
         case "-r", "--rules": c.rulesFiles.append(try args.value(a))
+        case "--rules-json": c.inlineRules.append(try args.value(a))
         case "--no-default-rules": c.defaultRules = false
         case "--replace":
             let v = try args.value(a)
@@ -127,7 +131,19 @@ func buildRules(_ c: Config) throws -> RuleSet {
     var files: [RulesFile] = []
     var paths = c.rulesFiles
     if c.defaultRules && FileManager.default.fileExists(atPath: defaultRulesPath) { paths.insert(defaultRulesPath, at: 0) }
-    for p in paths { files.append(try RulesFile.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))) }
+    var stdinUsed = false
+    for p in paths {
+        if p == "-" {
+            guard !stdinUsed else { throw CLIError(message: "-r - can only be used once") }
+            stdinUsed = true
+            files.append(try RulesFile.parse(FileHandle.standardInput.readDataToEndOfFile(), source: "<stdin>"))
+        } else {
+            files.append(try RulesFile.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath)))
+        }
+    }
+    for (i, json) in c.inlineRules.enumerated() {
+        files.append(try RulesFile.parse(Data(json.utf8), source: "--rules-json #\(i + 1)"))
+    }
     var extra: [Rule] = []
     for (i, (a, b)) in c.replaces.enumerated() {
         extra.append(try RuleSet.rule(from: .init(term: a, replace: b), id: "replace\(i + 1)"))

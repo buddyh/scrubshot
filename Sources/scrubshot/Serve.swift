@@ -599,7 +599,8 @@ func runServe(_ args: Args) throws -> Int32 {
 
     var sources: [String] = []
     if c.defaultRules && FileManager.default.fileExists(atPath: defaultRulesPath) { sources.append("~/.config/scrubshot/rules.json") }
-    sources += c.rulesFiles
+    sources += c.rulesFiles.map { $0 == "-" ? "<stdin>" : $0 }
+    sources += c.inlineRules.indices.map { "--rules-json #\($0 + 1)" }
     sources += c.replaces.map { "--replace \($0.0)=\($0.1)" }
     sources += c.terms.map { "--term \($0.0)" }
     if c.emails == true { sources.append("--emails") }

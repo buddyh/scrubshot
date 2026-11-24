@@ -126,3 +126,16 @@ final class PseudonymTests: XCTestCase {
         }
     }
 }
+
+final class RulesParseTests: XCTestCase {
+    func testParseNamesTheSourceInErrors() {
+        XCTAssertThrowsError(try RulesFile.parse(Data("{nope".utf8), source: "<stdin>")) { e in
+            XCTAssertTrue("\(e)".contains("<stdin>"), "\(e)")
+        }
+    }
+
+    func testParseReadsInlineJSON() throws {
+        let f = try RulesFile.parse(Data(#"{"rules":[{"term":"Globex","replace":"Initech"}]}"#.utf8), source: "--rules-json")
+        XCTAssertEqual(f.rules?.first?.term, "Globex")
+    }
+}

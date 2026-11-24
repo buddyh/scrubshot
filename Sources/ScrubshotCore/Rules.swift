@@ -72,8 +72,14 @@ public struct RulesFile: Codable {
         do { data = try Data(contentsOf: url) } catch {
             throw ScrubError.rules("cannot read \(url.path): \(error.localizedDescription)")
         }
+        return try parse(data, source: url.path)
+    }
+
+    /// Parses rules JSON. `source` names where it came from in error messages
+    /// (a path, `<stdin>` or `--rules-json`).
+    public static func parse(_ data: Data, source: String) throws -> RulesFile {
         do { return try JSONDecoder().decode(RulesFile.self, from: data) } catch {
-            throw ScrubError.rules("\(url.path) is not valid rules JSON: \(error)")
+            throw ScrubError.rules("\(source) is not valid rules JSON: \(error)")
         }
     }
 }
