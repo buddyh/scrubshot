@@ -94,6 +94,9 @@ svg.i { width: 14px; height: 14px; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .offline { color: var(--leak); font-size: 12px; display: none; }
 .offline.on { display: inline; }
+.banner { display: none; padding: 10px 14px; background: var(--warn); color: #fff; font-size: 14px; font-weight: 600; }
+.banner.on { display: block; }
+.banner small { display: block; font-weight: 400; opacity: 0.9; margin-top: 2px; }
 
 /* layout */
 .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
@@ -240,6 +243,7 @@ tr.skipped td { color: var(--muted); }
   <span class="offline" id="offline">Server unreachable</span>
   <button class="primary" id="scrubNew" type="button"></button>
 </header>
+<div class="banner" id="banner" role="alert"></div>
 <div class="layout">
   <aside class="rail">
     <div class="rail-head">
@@ -341,7 +345,11 @@ async function api(path, opts) {
   if ((r.headers.get('content-type') || '').includes('json')) {
     try { body = await r.json(); } catch (e) { body = null; }
   }
-  if (!r.ok) throw new Error((body && body.error) || (r.status + ' ' + r.statusText));
+  if (!r.ok) {
+    const err = new Error((body && body.error) || (r.status + ' ' + r.statusText));
+    err.status = r.status;
+    throw err;
+  }
   return body;
 }
 function toast(msg) {
@@ -808,6 +816,12 @@ async function upload(files) {
 }
 
 /* ---------- polling ---------- */
+function setBanner(msg) {
+  const b = $('#banner');
+  b.classList.toggle('on', !!msg);
+  if (msg) b.replaceChildren(msg, h('small', null, 'Allow access when macOS asks. This page retries on its own.'));
+  else b.replaceChildren();
+}
 let polling = false;
 async function poll() {
   if (polling) return;
@@ -815,12 +829,21 @@ async function poll() {
   try {
     const d = await api('/api/state' + (S.etag ? '?since=' + enc(S.etag) : ''));
     S.online = true;
+    setBanner('');
     if (d === NOT_MODIFIED) { renderHeader(); return; }
     S.etag = api.etag || null;
     S.data = d;
     if (!current()) S.sel = d.items && d.items.length ? d.items[0].name : null;
     renderAll();
   } catch (e) {
+    if (e.status === 503) {
+      // The server is up but cannot list the folder yet (macOS may be asking for access).
+      S.online = true;
+      setBanner(e.message);
+      renderHeader();
+      return;
+    }
+    setBanner('');
     if (S.online) toast('Server: ' + e.message);
     S.online = false;
     renderHeader();
