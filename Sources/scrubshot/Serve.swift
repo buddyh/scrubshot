@@ -326,38 +326,34 @@ final class ServeApp: @unchecked Sendable {
         lock.lock(); errors[name] = message; generation += 1; lock.unlock()
     }
 
-    /// Audit one input on the job queue, cached by (name, size, mtime). Blocks the calling thread.
-    func audit(_ name: String) throws -> String {
-        let attrs = try FileManager.default.attributesOfItem(atPath: path(name))
+    /// Audit one input on the job queue, cached by (name, size, mtime). Calls `done` when the audit finishes;
+    /// the calling thread is not held while OCR runs.
+    func audit(_ name: String, done: @escaping (Result<String, Error>) -> Void) {
+        let attrs: [FileAttributeKey: Any]
+        do { attrs = try FileManager.default.attributesOfItem(atPath: path(name)) } catch { done(.failure(error)); return }
         let key = "\(attrs[.size] ?? 0)|\(attrs[.modificationDate] ?? Date.distantPast)"
         lock.lock()
-        if let hit = auditCache[name], hit.key == key { lock.unlock(); return hit.json }
+        if let hit = auditCache[name], hit.key == key { lock.unlock(); done(.success(hit.json)); return }
         auditsPending += 1
         generation += 1
         lock.unlock()
 
-        final class Box { var value: Result<String, Error> = .failure(CLIError(message: "audit did not run")) }
-        let box = Box()
-        let done = DispatchSemaphore(value: 0)
         jobs.async {
             self.lock.lock()
             let hit = self.auditCache[name]
             self.lock.unlock()
+            let result: Result<String, Error>
             if let hit, hit.key == key {
-                box.value = .success(hit.json)
+                result = .success(hit.json)
             } else {
-                box.value = Result {
-                    try encode(try auditImage(self.path(name), rules: self.rules, ocrScale: self.config.ocrScale))
-                }
-                if case .success(let json) = box.value {
+                result = Result { try encode(try auditImage(self.path(name), rules: self.rules, ocrScale: self.config.ocrScale)) }
+                if case .success(let json) = result {
                     self.lock.lock(); self.auditCache[name] = (key, json); self.lock.unlock()
                 }
             }
             self.lock.lock(); self.auditsPending -= 1; self.generation += 1; self.lock.unlock()
-            done.signal()
+            done(result)
         }
-        done.wait()
-        return try box.value.get()
     }
 
     // MARK: thumbnails
@@ -410,6 +406,24 @@ final class ServeApp: @unchecked Sendable {
         return hostAliases.contains(name)
     }
 
+    /// Slow, CPU-heavy requests get their own small lane in the server.
+    func isHeavy(_ req: HTTPRequest) -> Bool { req.path == "/api/thumb" }
+
+    /// Audits answer when OCR finishes without holding a server thread; everything else answers at once.
+    func handleAsync(_ req: HTTPRequest, _ respond: @escaping (HTTPResponse) -> Void) {
+        guard req.method == "GET", req.path == "/api/audit" else { respond(handle(req)); return }
+        let host = (req.headers["host"] ?? "").lowercased()
+        guard allowedHost(host) else { respond(fail(403, "bad Host header")); return }
+        guard let name = validName(req.query["name"]), isInputName(name) else { respond(fail(400, "bad name")); return }
+        guard exists(name), insideWorkspace(name) else { respond(fail(404, "no such image")); return }
+        audit(name) { [self] result in
+            switch result {
+            case .success(let json): respond(noStore(.json(json)))
+            case .failure(let e): respond(fail(500, (e as? CLIError)?.message ?? "\(e)"))
+            }
+        }
+    }
+
     func handle(_ req: HTTPRequest) -> HTTPResponse {
         let host = (req.headers["host"] ?? "").lowercased()
         guard allowedHost(host) else { return fail(403, "bad Host header") }
@@ -443,9 +457,7 @@ final class ServeApp: @unchecked Sendable {
                 r.headers["Cache-Control"] = "private, max-age=3600"
                 return r
             case ("GET", "/api/audit"):
-                guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
-                guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
-                return noStore(.json(try audit(name)))
+                return fail(500, "audit needs the async handler")
             case ("POST", "/api/upload"):
                 guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name: need an image file name that does not end in -scrubbed") }
                 guard !req.body.isEmpty else { return fail(400, "empty body") }
@@ -550,7 +562,7 @@ func runServe(_ args: Args) throws -> Int32 {
 
     let app = ServeApp(root: root, config: c, rules: rules, sources: sources, port: port)
     app.hostAliases = hostAliases
-    let server = LocalHTTPServer(port: port, maxBody: maxRequestBody) { app.handle($0) }
+    let server = LocalHTTPServer(port: port, maxBody: maxRequestBody, isHeavy: { app.isHeavy($0) }) { app.handleAsync($0, $1) }
     do { app.port = try server.start() } catch let e as LocalHTTPServer.StartError { throw CLIError(message: e.description) }
     let url = "http://127.0.0.1:\(app.port)"
     print("scrubshot: serving \(root) at \(url)")
