@@ -136,6 +136,10 @@ an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
 
+To reach it from another device, put a local reverse proxy in front and pass its
+name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
+binds 127.0.0.1; only requests carrying that Host header are added.
+
 ## How it works
 
 1. **OCR.** Vision `VNRecognizeTextRequest`, accurate level, language correction
