@@ -1,4 +1,3 @@
-import CoreText
 import Foundation
 
 /// What kind of fake text an `auto` replacement should produce.
@@ -101,19 +100,28 @@ public enum Pseudonym {
 
     // MARK: helpers
 
-    /// Reference font for width comparisons. Widths scale roughly with font size and
-    /// across similar sans fonts, so one fixed size keeps the choice independent of the image.
-    static let referenceFont: CTFont = {
-        let named = CTFontCreateWithName("SFPro-Regular" as CFString, 13, nil)
-        if (CTFontCopyFullName(named) as String).contains("SF Pro") { return named }
-        return CTFontCreateUIFontForLanguage(.system, 13, nil) ?? CTFontCreateWithName("Helvetica" as CFString, 13, nil)
-    }()
+    /// Advance widths of ASCII 32...126 in the macOS system font (SF Pro) at 13pt, measured once
+    /// with CoreText and fixed here so auto picks don't depend on the fonts a machine has.
+    /// Widths scale roughly with size and across similar sans fonts, so one table keeps the
+    /// choice independent of the image.
+    static let referenceAdvances: [Double] = [
+        3.58, 3.97, 6.13, 8.11, 8.11, 11.95, 9.17, 3.78, 4.89, 4.89, 6.06, 8.11,
+        3.78, 6.06, 3.78, 3.88, 8.11, 5.95, 7.77, 8.07, 8.29, 7.96, 8.20, 7.33,
+        8.23, 8.20, 3.78, 3.78, 8.11, 8.11, 8.11, 6.59, 11.86, 8.68, 8.47, 9.23,
+        9.37, 7.67, 7.36, 9.63, 9.57, 3.40, 6.92, 8.49, 7.31, 11.29, 9.57, 9.95,
+        8.18, 9.95, 8.42, 8.21, 8.16, 9.51, 8.68, 12.50, 8.75, 8.44, 8.52, 4.89,
+        3.88, 4.89, 8.11, 7.51, 6.42, 7.10, 7.91, 7.20, 7.91, 7.35, 4.63, 7.85,
+        7.57, 3.14, 3.13, 6.98, 3.21, 11.24, 7.51, 7.60, 7.86, 7.85, 4.88, 6.73,
+        4.65, 7.51, 6.97, 9.99, 6.74, 6.98, 6.93, 4.89, 3.29, 4.89, 8.11
+    ]
 
-    /// Rendered width of `text` in the reference font, in points.
+    /// Approximate rendered width of `text` in the reference font, in points (no kerning).
+    /// Characters outside printable ASCII count as an average lowercase letter.
     static func referenceWidth(_ text: String) -> Double {
-        let attrs: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): referenceFont]
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attrs))
-        return CTLineGetTypographicBounds(line, nil, nil, nil)
+        text.unicodeScalars.reduce(0) { sum, u in
+            let v = Int(u.value)
+            return sum + ((32...126).contains(v) ? referenceAdvances[v - 32] : 7.2)
+        }
     }
 
     /// Picks a word from `list` that renders about as wide as `original` (after copying its casing).
