@@ -350,6 +350,7 @@ function toast(msg) {
 
 /* ---------- helpers ---------- */
 const imgUrl = (name, v) => '/api/image?name=' + enc(name) + '&v=' + enc(v == null ? '' : v);
+const thumbUrl = (name, v) => '/api/thumb?name=' + enc(name) + '&w=160&v=' + enc(v == null ? '' : v);
 const items = () => (S.data && S.data.items) || [];
 const current = () => items().find((i) => i.name === S.sel) || null;
 const pct = (v, total) => (total ? (v / total * 100) : 0) + '%';
@@ -438,7 +439,7 @@ function renderRail() {
       const lk = it.report && it.report.leaks ? it.report.leaks.length : 0;
       c.textContent = lk ? lk + ' leaked' : (it.report ? n + ' replaced' : '');
     }
-    if (r.v !== it.updated) { r.v = it.updated; r.img.src = imgUrl(it.name, it.updated); }
+    if (r.v !== it.updated) { r.v = it.updated; r.img.src = thumbUrl(it.name, it.updated); }
     ordered.push(r.el);
   }
   for (const [name, r] of rows) {
