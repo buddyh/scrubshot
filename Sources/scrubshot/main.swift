@@ -35,6 +35,8 @@ AUDIT OPTIONS
 SERVE OPTIONS
       --port <n>          port on 127.0.0.1 (default 7317; 0 picks a free port)
       --open              open the page in the default browser
+      --host-alias <name> also accept this Host header (repeatable), for a local
+                          reverse proxy such as Caddy serving scrubshot.internal
   folder defaults to the current directory. The rule options above apply.
   Open http://127.0.0.1:<port>; drop in screenshots, review, copy. Ctrl-C stops it.
 
