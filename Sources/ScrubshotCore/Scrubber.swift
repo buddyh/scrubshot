@@ -52,10 +52,25 @@ struct PlannedEdit {
     var line: String
 }
 
+/// Opt-in per-phase timing: SCRUBSHOT_TIMING=1 prints milliseconds to stderr.
+enum Timing {
+    static let enabled = ProcessInfo.processInfo.environment["SCRUBSHOT_TIMING"] != nil
+
+    static func measure<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
+        guard enabled else { return try body() }
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+            FileHandle.standardError.write(String(format: "[timing] %@ %.0f ms\n", phase, ms).data(using: .utf8)!)
+        }
+        return try body()
+    }
+}
+
 public enum Scrubber {
     public static func scrub(_ image: CGImage, options: ScrubOptions) throws -> ScrubResult {
         let bmp = try Bitmap(image: image)
-        let pieces = try OCR.recognize(image, scale: options.ocrScale)
+        let pieces = try Timing.measure("ocr") { try OCR.recognize(image, scale: options.ocrScale) }
         let lines = OCR.lines(pieces)
         let plan = planEdits(lines: lines, rules: options.rules)
 
@@ -64,8 +79,8 @@ public enum Scrubber {
             EditRequest(box: e.piece.box(for: e.range), originalText: (e.piece.text as NSString).substring(with: e.range),
                         keepPrefix: e.keepPrefix, newText: e.newText)
         }
-        let analyses = requests.map { Renderer.analyze($0, in: bmp) }
-        let choices = consensus(analyses)
+        let analyses = Timing.measure("analyze") { requests.map { Renderer.analyze($0, in: bmp) } }
+        let choices = Timing.measure("consensus") { consensus(analyses) }
         if ProcessInfo.processInfo.environment["SCRUBSHOT_DEBUG"] != nil {
             for (i, a) in analyses.enumerated() {
                 guard let a else { continue }
@@ -74,6 +89,7 @@ public enum Scrubber {
             }
         }
 
+        let tDraw = DispatchTime.now().uptimeNanoseconds
         var records: [ReplacementRecord] = []
         var warnings: [String] = []
         var redrawn: [PixelRect] = []
@@ -97,9 +113,12 @@ public enum Scrubber {
                 warnings.append("\"\(from)\": skipped, no text pixels found in the OCR box")
             }
         }
+        if Timing.enabled {
+            FileHandle.standardError.write(String(format: "[timing] place+draw %.0f ms\n", Double(DispatchTime.now().uptimeNanoseconds - tDraw) / 1e6).data(using: .utf8)!)
+        }
         let out = try bmp.makeImage()
-        let leaks = try verify(out, rules: options.rules, originals: records.map(\.original),
-                               redrawn: redrawn, scales: options.verifyScales)
+        let leaks = try Timing.measure("verify") { try verify(out, rules: options.rules, originals: records.map(\.original),
+                               redrawn: redrawn, scales: options.verifyScales) }
         return ScrubResult(image: out, replacements: records, leaks: leaks, warnings: warnings)
     }
 
@@ -219,7 +238,7 @@ public enum Scrubber {
         var leaks: [Leak] = []
         let fuzzyTerms = Set(originals.map { Rule.fold($0) }.filter { $0.count >= 4 }).sorted()
         for scale in scales {
-            let lines = OCR.lines(try OCR.recognize(image, scale: scale))
+            let lines = OCR.lines(try Timing.measure("verify ocr x\(scale)") { try OCR.recognize(image, scale: scale) })
             for line in lines {
                 for m in rules.matches(in: line.text) {
                     leaks.append(Leak(text: m.original, line: line.text, rule: m.rule,
