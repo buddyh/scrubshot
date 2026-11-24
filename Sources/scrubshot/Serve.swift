@@ -102,7 +102,7 @@ final class ServeApp: @unchecked Sendable {
 
     func items() -> [ServeItem] {
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).filter { n in
-            guard isInputName(n), !n.hasPrefix(".") else { return false }
+            guard isInputName(n), !n.hasPrefix("."), insideWorkspace(n) else { return false }
             var isDir: ObjCBool = false
             return FileManager.default.fileExists(atPath: path(n), isDirectory: &isDir) && !isDir.boolValue
         }
