@@ -329,11 +329,14 @@ if (!['side', 'slider', 'ocr'].includes(S.mode)) S.mode = 'side';
 if (!['fit', '1', '2'].includes(S.zoom)) S.zoom = 'fit';
 
 /* ---------- api + toast ---------- */
+const NOT_MODIFIED = Symbol('not modified');
 async function api(path, opts) {
   const o = Object.assign({ cache: 'no-store' }, opts || {});
   o.headers = Object.assign({}, o.headers || {});
   if (o.method === 'POST') o.headers['X-Scrubshot'] = '1';
   const r = await fetch(path, o);
+  if (r.status === 304) return NOT_MODIFIED;
+  if (r.headers.get('etag')) api.etag = r.headers.get('etag').replace(/"/g, '');
   let body = null;
   if ((r.headers.get('content-type') || '').includes('json')) {
     try { body = await r.json(); } catch (e) { body = null; }
@@ -810,8 +813,10 @@ async function poll() {
   if (polling) return;
   polling = true;
   try {
-    const d = await api('/api/state');
+    const d = await api('/api/state' + (S.etag ? '?since=' + enc(S.etag) : ''));
     S.online = true;
+    if (d === NOT_MODIFIED) { renderHeader(); return; }
+    S.etag = api.etag || null;
     S.data = d;
     if (!current()) S.sel = d.items && d.items.length ? d.items[0].name : null;
     renderAll();
@@ -859,7 +864,8 @@ window.addEventListener('keydown', (e) => {
 renderMain();
 renderHeader();
 poll();
-setInterval(poll, 1500);
+setInterval(() => { if (!document.hidden) poll(); }, 1500);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 })();
 </script>
 </body>
