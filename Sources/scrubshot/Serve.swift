@@ -185,17 +185,53 @@ final class ServeApp: @unchecked Sendable {
         return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
     }
 
-    /// Names of the entries in the workspace folder.
+    /// The folder could not be listed in time, usually because macOS is waiting for the user to allow access.
+    struct FolderWait: Error { let message: String }
+
+    private final class ListingJob {
+        let group = DispatchGroup()
+        var result: Result<[String], Error>?
+    }
+
+    static let listTimeout = 2.0
+    private let listLock = NSLock()
+    private let listQueue = DispatchQueue(label: "scrubshot.list")
+    private var listing: ListingJob?
+
+    /// Names of the entries in the workspace folder. The listing runs on its own queue; if it is still blocked
+    /// after `listTimeout` (a privacy prompt can hold open() for as long as it stays unanswered) this throws
+    /// `FolderWait`. Callers share one blocked job, so a stuck folder never uses more than one thread.
     func listNames() throws -> [String] {
-        try FileManager.default.contentsOfDirectory(atPath: root)
+        listLock.lock()
+        let job: ListingJob
+        if let running = listing {
+            job = running
+        } else {
+            job = ListingJob()
+            job.group.enter()
+            listing = job
+            listQueue.async {
+                let r = Result { try FileManager.default.contentsOfDirectory(atPath: self.root) }
+                self.listLock.lock()
+                job.result = r
+                if self.listing === job { self.listing = nil }
+                self.listLock.unlock()
+                job.group.leave()
+            }
+        }
+        listLock.unlock()
+        if job.group.wait(timeout: .now() + Self.listTimeout) == .timedOut {
+            throw FolderWait(message: "waiting for access to \(root) (macOS privacy prompt?)")
+        }
+        listLock.lock(); let r = job.result; listLock.unlock()
+        return try (r ?? .failure(CLIError(message: "folder listing did not run"))).get()
     }
 
     private struct CachedItem { let sig: String; let json: String }
 
     /// Items as (name, input mtime, encoded JSON). Reports and encoded items are cached by file times, so a
     /// poll that changes nothing does one directory listing and a few stat calls per file.
-    private func itemFragments() throws -> [(name: String, mtime: Int64, status: String, json: String)] {
-        let all = try listNames()
+    private func itemFragments(_ all: [String]) throws -> [(name: String, mtime: Int64, status: String, json: String)] {
         let present = Set(all)
         lock.lock()
         let queuedNow = Set(queued), runningNow = running, errorsNow = errors
@@ -255,26 +291,33 @@ final class ServeApp: @unchecked Sendable {
 
     /// Names of inputs with status "new".
     func newNames() throws -> [String] {
-        try stateLock.withLock { try itemFragments().filter { $0.status == "new" }.map(\.name) }
+        let names = try listNames()
+        return try stateLock.withLock { try itemFragments(names).filter { $0.status == "new" }.map(\.name) }
     }
 
     /// The state JSON and its ETag. Computed at most once per `stateTTL` unless a job changed something.
     func state() throws -> (body: String, etag: String) {
-        try stateLock.withLock {
+        if let m = freshMemo() { return m }
+        let names = try listNames()   // outside stateLock, so a stuck folder never queues callers behind it
+        return try stateLock.withLock {
+            if let m = freshMemo() { return m }
             lock.lock()
             let gen = generation
-            lock.unlock()
-            if let m = stateMemo, m.gen == gen, Date().timeIntervalSince(m.at) < Self.stateTTL { return (m.body, m.etag) }
-            lock.lock()
             let busy = running != nil || !queued.isEmpty || auditsPending > 0
             lock.unlock()
-            let frags = try itemFragments()
+            let frags = try itemFragments(names)
             let body = "{\"busy\":\(busy),\"items\":[" + frags.map(\.json).joined(separator: ",") + "],\"rules\":" + rulesJSON
                 + ",\"version\":" + versionJSON + ",\"workspace\":" + workspaceJSON + "}"
             let etag = "\"" + fnv1a(body) + "\""
             stateMemo = (Date(), gen, body, etag)
             return (body, etag)
         }
+    }
+
+    private func freshMemo() -> (body: String, etag: String)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let m = stateMemo, m.gen == generation, Date().timeIntervalSince(m.at) < Self.stateTTL else { return nil }
+        return (m.body, m.etag)
     }
 
     // MARK: jobs
@@ -479,6 +522,8 @@ final class ServeApp: @unchecked Sendable {
                 let known = ["/", "/api/state", "/api/image", "/api/thumb", "/api/audit", "/api/upload", "/api/scrub"]
                 return known.contains(req.path) ? fail(405, "method not allowed") : fail(404, "not found")
             }
+        } catch let e as FolderWait {
+            return fail(503, e.message)
         } catch let e as CLIError {
             return fail(500, e.message)
         } catch {
