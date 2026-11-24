@@ -99,13 +99,21 @@ public enum Scrubber {
         }
 
         let tDraw = DispatchTime.now().uptimeNanoseconds
+        // Placement only reads the analysis, so it runs concurrently; drawing stays in order.
+        var placed = [Renderer.Fit?](repeating: nil, count: plan.count)
+        placed.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: plan.count) { i in
+                if let a = analyses[i], let c = choices[i] { (base + i).pointee = Renderer.place(a, fontName: c.0, size: c.1) }
+            }
+        }
         var records: [ReplacementRecord] = []
         var warnings: [String] = []
         var redrawn: [PixelRect] = []
         for (i, e) in plan.enumerated() {
             let from = requests[i].originalText
             var result: EditResult?
-            if let a = analyses[i], let c = choices[i], let f = Renderer.place(a, fontName: c.0, size: c.1) {
+            if let a = analyses[i], let f = placed[i] {
                 result = Renderer.draw(a, fit: f, into: bmp)
             }
             let to = (from as NSString).substring(to: e.keepPrefix) + e.newText
