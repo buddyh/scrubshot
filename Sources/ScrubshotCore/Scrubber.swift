@@ -79,7 +79,16 @@ public enum Scrubber {
             EditRequest(box: e.piece.box(for: e.range), originalText: (e.piece.text as NSString).substring(with: e.range),
                         keepPrefix: e.keepPrefix, newText: e.newText)
         }
-        let analyses = Timing.measure("analyze") { requests.map { Renderer.analyze($0, in: bmp) } }
+        let analyses = Timing.measure("analyze") {
+            var slots = [Renderer.Analysis?](repeating: nil, count: requests.count)
+            slots.withUnsafeMutableBufferPointer { buf in
+                let base = buf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: requests.count) { i in
+                    (base + i).pointee = Renderer.analyze(requests[i], in: bmp)
+                }
+            }
+            return slots
+        }
         let choices = Timing.measure("consensus") { consensus(analyses) }
         if ProcessInfo.processInfo.environment["SCRUBSHOT_DEBUG"] != nil {
             for (i, a) in analyses.enumerated() {
