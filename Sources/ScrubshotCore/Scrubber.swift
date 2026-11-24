@@ -244,24 +244,39 @@ public enum Scrubber {
     /// reports near-misses of the replaced originals (one edit away).
     public static func verify(_ image: CGImage, rules: RuleSet, originals: [String], redrawn: [PixelRect],
                               scales: [Double]) throws -> [Leak] {
-        var leaks: [Leak] = []
         let fuzzyTerms = Set(originals.map { Rule.fold($0) }.filter { $0.count >= 4 }).sorted()
-        for scale in scales {
-            let lines = OCR.lines(try Timing.measure("verify ocr x\(scale)") { try OCR.recognize(image, scale: scale) })
-            for line in lines {
-                for m in rules.matches(in: line.text) {
-                    leaks.append(Leak(text: m.original, line: line.text, rule: m.rule,
-                                      box: PixelRect(boxFor(line, m.range)), ocrScale: scale))
+        // Scales are independent; run them together and join in scale order.
+        var perScale = [Result<[Leak], Error>?](repeating: nil, count: scales.count)
+        perScale.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: scales.count) { i in
+                (base + i).pointee = Result {
+                    try verifyScale(image, scale: scales[i], rules: rules, fuzzyTerms: fuzzyTerms, redrawn: redrawn)
                 }
-                for part in line.parts {
-                    let pbox = PixelRect(part.piece.box)
-                    guard redrawn.contains(where: { $0.intersects(pbox) }) else { continue }
-                    let folded = Rule.fold(part.piece.text)
-                    for t in fuzzyTerms where containsNear(folded, t) {
-                        if leaks.contains(where: { $0.line == line.text && $0.ocrScale == scale && Rule.fold($0.text) == t }) { continue }
-                        leaks.append(Leak(text: t, line: line.text, rule: "near-match of a replaced term",
-                                          box: pbox, ocrScale: scale))
-                    }
+            }
+        }
+        var leaks: [Leak] = []
+        for r in perScale { leaks += try r!.get() }
+        return leaks
+    }
+
+    private static func verifyScale(_ image: CGImage, scale: Double, rules: RuleSet, fuzzyTerms: [String],
+                                    redrawn: [PixelRect]) throws -> [Leak] {
+        var leaks: [Leak] = []
+        let lines = OCR.lines(try Timing.measure("verify ocr x\(scale)") { try OCR.recognize(image, scale: scale) })
+        for line in lines {
+            for m in rules.matches(in: line.text) {
+                leaks.append(Leak(text: m.original, line: line.text, rule: m.rule,
+                                  box: PixelRect(boxFor(line, m.range)), ocrScale: scale))
+            }
+            for part in line.parts {
+                let pbox = PixelRect(part.piece.box)
+                guard redrawn.contains(where: { $0.intersects(pbox) }) else { continue }
+                let folded = Rule.fold(part.piece.text)
+                for t in fuzzyTerms where containsNear(folded, t) {
+                    if leaks.contains(where: { $0.line == line.text && $0.ocrScale == scale && Rule.fold($0.text) == t }) { continue }
+                    leaks.append(Leak(text: t, line: line.text, rule: "near-match of a replaced term",
+                                      box: pbox, ocrScale: scale))
                 }
             }
         }
