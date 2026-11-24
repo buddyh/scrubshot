@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 
 /// What kind of fake text an `auto` replacement should produce.
@@ -33,12 +34,11 @@ public enum Pseudonym {
     static func phrase(_ original: String, list: [String], key: String) -> String {
         let words = original.split(whereSeparator: { $0 == " " })
         if words.count <= 1 {
-            return applyCase(of: original, to: pick(list, near: original.count, key: key))
+            return pickByWidth(list, like: original, key: key)
         }
         var out: [String] = []
         for (i, w) in words.enumerated() {
-            let p = pick(list, near: w.count, key: key + "#\(i)", avoid: out)
-            out.append(applyCase(of: String(w), to: p))
+            out.append(pickByWidth(list, like: String(w), key: key + "#\(i)", avoid: out))
         }
         return out.joined(separator: " ")
     }
@@ -46,11 +46,11 @@ public enum Pseudonym {
     static func person(_ original: String, _ key: String) -> String {
         let words = original.split(separator: " ")
         if words.count <= 1 {
-            return applyCase(of: original, to: pick(Words.firstNames, near: original.count, key: key))
+            return pickByWidth(Words.firstNames, like: original, key: key)
         }
-        let first = pick(Words.firstNames, near: words.first!.count, key: key + "#first")
-        let last = pick(Words.lastNames, near: words.last!.count, key: key + "#last")
-        return applyCase(of: String(words.first!), to: first) + " " + applyCase(of: String(words.last!), to: last)
+        let first = pickByWidth(Words.firstNames, like: String(words.first!), key: key + "#first")
+        let last = pickByWidth(Words.lastNames, like: String(words.last!), key: key + "#last")
+        return first + " " + last
     }
 
     static func repo(_ original: String, _ key: String) -> String {
@@ -62,24 +62,21 @@ public enum Pseudonym {
         let segments = original.split(separator: "-", omittingEmptySubsequences: false)
         var out: [String] = []
         for (i, s) in segments.prefix(5).enumerated() {
-            out.append(pick(Words.repo, near: max(2, s.count), key: key + "#\(i)", avoid: out))
+            out.append(pickByWidth(Words.repo, like: String(s), key: key + "#\(i)", avoid: out))
         }
         return out.joined(separator: "-")
     }
 
-    /// Fake address about as long as the original, always at example.com.
+    /// Fake address with each name part about as wide as the original's, always at example.com.
     static func email(_ original: String, _ key: String) -> String {
         let local = original.split(separator: "@").first.map(String.init) ?? original
         let parts = local.split(whereSeparator: { ".-_".contains($0) })
-        // Budget the local part so the whole address stays near the original length.
-        let budget = max(3, original.count - "@example.com".count)
         if parts.count >= 2 {
-            let f = max(2, budget * parts[0].count / max(1, parts[0].count + parts[1].count))
-            let first = pick(Words.firstNames, near: f, key: key + "#first").lowercased()
-            let last = pick(Words.lastNames, near: max(2, budget - f - 1), key: key + "#last").lowercased()
+            let first = pickByWidth(Words.firstNames, like: String(parts[0]).lowercased(), key: key + "#first").lowercased()
+            let last = pickByWidth(Words.lastNames, like: String(parts[1]).lowercased(), key: key + "#last").lowercased()
             return "\(first).\(last)@example.com"
         }
-        return pick(Words.firstNames, near: budget, key: key + "#first").lowercased() + "@example.com"
+        return pickByWidth(Words.firstNames, like: local.lowercased(), key: key + "#first").lowercased() + "@example.com"
     }
 
     static func acronym(_ original: String, _ key: String) -> String {
@@ -103,6 +100,38 @@ public enum Pseudonym {
     }
 
     // MARK: helpers
+
+    /// Reference font for width comparisons. Widths scale roughly with font size and
+    /// across similar sans fonts, so one fixed size keeps the choice independent of the image.
+    static let referenceFont: CTFont = {
+        let named = CTFontCreateWithName("SFPro-Regular" as CFString, 13, nil)
+        if (CTFontCopyFullName(named) as String).contains("SF Pro") { return named }
+        return CTFontCreateUIFontForLanguage(.system, 13, nil) ?? CTFontCreateWithName("Helvetica" as CFString, 13, nil)
+    }()
+
+    /// Rendered width of `text` in the reference font, in points.
+    static func referenceWidth(_ text: String) -> Double {
+        let attrs: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): referenceFont]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attrs))
+        return CTLineGetTypographicBounds(line, nil, nil, nil)
+    }
+
+    /// Picks a word from `list` that renders about as wide as `original` (after copying its casing).
+    /// Takes the few nearest by width and chooses among them by hash, so the same key always
+    /// gives the same word without every similar-width original mapping to one word.
+    static func pickByWidth(_ list: [String], like original: String, key: String, avoid: [String] = [], nearest k: Int = 3) -> String {
+        let target = referenceWidth(original)
+        let avoided = Set(avoid.map { $0.lowercased() })
+        var ranked: [(delta: Double, index: Int, word: String)] = []
+        for (i, w) in list.enumerated() where !avoided.contains(w.lowercased()) {
+            let cased = applyCase(of: original, to: w)
+            ranked.append((abs(referenceWidth(cased) - target), i, cased))
+        }
+        if ranked.isEmpty { return applyCase(of: original, to: list[Int(fnv1a(key) % UInt64(list.count))]) }
+        ranked.sort { $0.delta != $1.delta ? $0.delta < $1.delta : $0.index < $1.index }
+        let top = ranked.prefix(k)
+        return top[top.startIndex + Int(fnv1a(key) % UInt64(top.count))].word
+    }
 
     /// Picks from `list` a word whose length is close to `target`, by hash.
     static func pick(_ list: [String], near target: Int, key: String, avoid: [String] = []) -> String {
