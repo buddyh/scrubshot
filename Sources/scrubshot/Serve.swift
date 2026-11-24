@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import ScrubshotCore
 
 // `scrubshot serve`: a local web UI over a folder of screenshots. See the contract for the API.
@@ -39,6 +40,57 @@ struct ServeState: Encodable {
     let items: [ServeItem]
 }
 
+/// In-memory cache of small rendered thumbnails, bounded by entry count and total bytes (oldest out first).
+final class ThumbCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var store: [String: Data] = [:]
+    private var order: [String] = []
+    private var bytes = 0
+    let maxEntries: Int
+    let maxBytes: Int
+
+    init(maxEntries: Int = 2000, maxBytes: Int = 48 * 1024 * 1024) {
+        self.maxEntries = maxEntries
+        self.maxBytes = maxBytes
+    }
+
+    var count: Int { lock.lock(); defer { lock.unlock() }; return store.count }
+
+    func get(_ key: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return store[key]
+    }
+
+    func put(_ key: String, _ data: Data) {
+        lock.lock(); defer { lock.unlock() }
+        if let old = store[key] { bytes -= old.count } else { order.append(key) }
+        store[key] = data
+        bytes += data.count
+        while (store.count > maxEntries || bytes > maxBytes) && !order.isEmpty {
+            let k = order.removeFirst()
+            if let d = store.removeValue(forKey: k) { bytes -= d.count }
+        }
+    }
+}
+
+/// Downscale an image file so its longest side is at most `maxPixel`, encoded as PNG. Nil when unreadable.
+func makeThumbnail(path: String, maxPixel: Int) -> Data? {
+    let srcOpts = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, srcOpts) else { return nil }
+    let opts: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+    ]
+    guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+    let out = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, cg, nil)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return out as Data
+}
+
 final class ServeApp: @unchecked Sendable {
     let root: String
     let config: Config
@@ -55,6 +107,7 @@ final class ServeApp: @unchecked Sendable {
     private var auditsPending = 0
     private var errors: [String: String] = [:]
     private var auditCache: [String: (key: String, json: String)] = [:]
+    let thumbs = ThumbCache()
 
     init(root: String, config: Config, rules: RuleSet, sources: [String], port: Int) {
         self.root = root
@@ -215,6 +268,19 @@ final class ServeApp: @unchecked Sendable {
         return try box.value.get()
     }
 
+    // MARK: thumbnails
+
+    /// A small PNG of an input image, cached by (name, size, mtime, width).
+    func thumbnail(_ name: String, width: Int) -> Data? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path(name)) else { return nil }
+        let mtime = Int64(((attrs[.modificationDate] as? Date) ?? .distantPast).timeIntervalSince1970 * 1000)
+        let key = "\(name)|\(attrs[.size] ?? 0)|\(mtime)|\(width)"
+        if let hit = thumbs.get(key) { return hit }
+        guard let data = makeThumbnail(path: path(name), maxPixel: width) else { return nil }
+        thumbs.put(key, data)
+        return data
+    }
+
     // MARK: upload
 
     /// Save bytes under `name`, or `stem-2.ext`, `stem-3.ext`... when taken. Never overwrites.
@@ -267,6 +333,18 @@ final class ServeApp: @unchecked Sendable {
                 guard isImageName(name), exists(name), insideWorkspace(name),
                       let data = FileManager.default.contents(atPath: path(name)) else { return fail(404, "no such image") }
                 return noStore(.data(data, contentType: mimeType(name)))
+            case ("GET", "/api/thumb"):
+                guard let name = validName(req.query["name"]), isImageName(name) else { return fail(400, "bad name") }
+                var width = 160
+                if let w = req.query["w"] {
+                    guard let n = Int(w), n >= 16, n <= 512 else { return fail(400, "bad w: use 16...512") }
+                    width = n
+                }
+                guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
+                guard let data = thumbnail(name, width: width) else { return fail(404, "cannot read image") }
+                var r = HTTPResponse.data(data, contentType: "image/png")
+                r.headers["Cache-Control"] = "private, max-age=3600"
+                return r
             case ("GET", "/api/audit"):
                 guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
                 guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
@@ -289,7 +367,7 @@ final class ServeApp: @unchecked Sendable {
                 for n in names { enqueueScrub(n) }
                 return .json(try serveEncode(["queued": names]))
             default:
-                let known = ["/", "/api/state", "/api/image", "/api/audit", "/api/upload", "/api/scrub"]
+                let known = ["/", "/api/state", "/api/image", "/api/thumb", "/api/audit", "/api/upload", "/api/scrub"]
                 return known.contains(req.path) ? fail(405, "method not allowed") : fail(404, "not found")
             }
         } catch let e as CLIError {
