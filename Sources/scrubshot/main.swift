@@ -144,22 +144,28 @@ struct AuditMatch: Codable { let text: String; let replacement: String; let rule
 struct AuditLine: Codable { let text: String; let box: PixelRect; let spans: [AuditSpan]; let matches: [AuditMatch] }
 struct AuditResult: Codable { let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
 
-func audit(_ c: Config) throws -> Int32 {
-    guard c.inputs.count == 1 else { throw CLIError(message: "audit takes exactly one image") }
-    let path = c.inputs[0]
-    let rules = try buildRules(c)
+/// OCR one image and mark the spans the rules match.
+func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
     let loaded = try ImageFile.load(URL(fileURLWithPath: path))
-    let lines = OCR.lines(try OCR.recognize(loaded.image, scale: c.ocrScale))
+    let lines = OCR.lines(try OCR.recognize(loaded.image, scale: ocrScale))
     let out = lines.map { l in
         AuditLine(text: l.text, box: PixelRect(l.box),
                   spans: l.parts.map { AuditSpan(text: $0.piece.text, box: PixelRect($0.piece.box),
                                                  confidence: (Double($0.piece.confidence) * 100).rounded() / 100) },
                   matches: rules.matches(in: l.text).map { AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule) })
     }
+    return AuditResult(image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
+}
+
+func audit(_ c: Config) throws -> Int32 {
+    guard c.inputs.count == 1 else { throw CLIError(message: "audit takes exactly one image") }
+    let path = c.inputs[0]
+    let result = try auditImage(path, rules: try buildRules(c), ocrScale: c.ocrScale)
+    let out = result.lines
     if c.json {
-        print(try encode(AuditResult(image: path, width: loaded.image.width, height: loaded.image.height, lines: out)))
+        print(try encode(result))
     } else {
-        print("\(path): \(loaded.image.width)x\(loaded.image.height), \(out.count) lines")
+        print("\(path): \(result.width)x\(result.height), \(out.count) lines")
         for l in out {
             let conf = l.spans.map(\.confidence).min() ?? 0
             print(String(format: "%5d,%-5d %4dx%-3d %.2f  ", l.box.x0, l.box.y0, l.box.width, l.box.height, conf) + l.text)
