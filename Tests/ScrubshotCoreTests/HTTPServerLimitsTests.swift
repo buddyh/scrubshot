@@ -119,6 +119,45 @@ final class HTTPServerLimitsTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 3)
     }
 
+    func testTricklingClientGets408AtDeadline() throws {
+        var limits = LocalHTTPServer.Limits()
+        limits.readTimeout = 1
+        limits.requestDeadline = 2
+        let server = LocalHTTPServer(port: 0, maxBody: 1024, limits: limits) { _ in .text("ok") }
+        let port = try server.start()
+        defer { server.stop() }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = UInt16(port).bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let rc = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        XCTAssertEqual(rc, 0)
+        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        let start = Date()
+        var out = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        // One byte every 0.5s keeps the idle timer fresh, so only the deadline can end this.
+        for byte in Array("GET / HTTP/1.1\r\nHost: x\r\nX-Slow: aaaaaaaaaaaaaaaaaaaa".utf8) where Date().timeIntervalSince(start) < 6 {
+            var b = byte
+            if write(fd, &b, 1) <= 0 { break }
+            let until = Date().addingTimeInterval(0.5)
+            while Date() < until {
+                let n = read(fd, &buf, buf.count)
+                if n > 0 { out.append(contentsOf: buf[0..<n]) }
+                if n == 0 { break }
+            }
+            if !out.isEmpty { break }
+        }
+        let reply = String(decoding: out, as: UTF8.self)
+        XCTAssertTrue(reply.hasPrefix("HTTP/1.1 408"), "got \(reply.prefix(40))")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
     func testConnectionCapAnswers503() throws {
         var limits = LocalHTTPServer.Limits()
         limits.maxConnections = 2
