@@ -111,6 +111,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     /// Bounds that keep a few slow or idle clients from using up every thread.
     public struct Limits {
+        /// Open connections. More than this get an immediate 503.
+        public var maxConnections = 128
         public init() {}
     }
 
@@ -123,6 +125,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "scrubshot.http")
     private let work = DispatchQueue(label: "scrubshot.http.work", attributes: .concurrent)
     private let lock = NSLock()
+    private var openConnections = 0
     private var listener: NWListener?
     /// The bound port. Set by `start`.
     public private(set) var port: Int
@@ -130,6 +133,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
     private final class Conn {
         let nw: NWConnection
         var closed = false
+        var counted = true
         init(_ nw: NWConnection) { self.nw = nw }
     }
 
@@ -184,7 +188,16 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     private func accept(_ nw: NWConnection) {
         let c = Conn(nw)
+        lock.lock()
+        let over = openConnections >= limits.maxConnections
+        if !over { openConnections += 1 }
+        lock.unlock()
         nw.start(queue: queue)
+        if over {
+            c.counted = false
+            send(c, Self.failure(503, "too many connections"))
+            return
+        }
         receive(c, Data())
     }
 
@@ -220,6 +233,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
         defer { lock.unlock() }
         if c.closed { return false }
         c.closed = true
+        if c.counted { openConnections -= 1 }
         return true
     }
 
