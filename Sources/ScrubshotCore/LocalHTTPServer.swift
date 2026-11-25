@@ -287,26 +287,34 @@ public final class LocalHTTPServer: @unchecked Sendable {
         .json("{\"error\":\"\(message)\"}", status: status)
     }
 
-    /// Mark the connection closed once and free its slot. Returns false when it was already closed.
+    /// Mark the connection closed once. Returns false when it was already closed.
     private func markClosed(_ c: Conn) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         if c.closed { return false }
         c.closed = true
-        if c.counted { openConnections -= 1 }
         return true
+    }
+
+    /// Free the connection's slot once its socket is done.
+    private func release(_ c: Conn) {
+        lock.lock()
+        if c.counted { c.counted = false; openConnections -= 1 }
+        lock.unlock()
     }
 
     private func close(_ c: Conn) {
         guard markClosed(c) else { return }
         c.timer?.cancel()
         c.nw.cancel()
+        release(c)
     }
 
+    /// The slot stays taken until the response is written, so the cap counts sockets still sending.
     private func send(_ c: Conn, _ response: HTTPResponse) {
         guard markClosed(c) else { return }
         c.timer?.cancel()
         c.nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
-                  completion: .contentProcessed { _ in c.nw.cancel() })
+                  completion: .contentProcessed { [self] _ in c.nw.cancel(); release(c) })
     }
 }
