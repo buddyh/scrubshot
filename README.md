@@ -56,6 +56,7 @@ scrubshot a.png b.png -r work.json       # several files, extra rules
 scrubshot shot.png --replace 'Globex=Initech' --term 'person:Hank Scorpio'
 scrubshot shot.png --report              # also writes shot-scrubbed.report.json
 scrubshot shot.png --dry-run --json      # what would change, nothing written
+scrubshot rules-path                     # print the default rules file path
 ```
 
 | Option | Meaning |
@@ -63,9 +64,9 @@ scrubshot shot.png --dry-run --json      # what would change, nothing written
 | `-o, --output <path>` | Output file (one input only). |
 | `-r, --rules <file>` | Rules JSON, repeatable. The default file loads first unless `--no-default-rules`. |
 | `--replace a=b` | Literal replacement, case-insensitive. |
-| `--term [category:]text` | Stable fake replacement for `text`. |
+| `--term [category:]text` | Stable fake replacement for `text`. Categories: `company`, `person`, `product`, `repo`, `acronym`, `email`, `url`, `word` (the default). |
 | `--emails`, `--urls` (and `--no-…`) | Built-in detectors. |
-| `--report` | JSON next to the output: each original, replacement, box, font, color, fit. Never embedded in the image. |
+| `--report` | JSON next to the output: each original, replacement, box, font, color, fit. Never embedded in the image. It is also written when the leak check fails, and it holds the original text, so keep it private. |
 | `--json` | Machine-readable result on stdout. |
 | `--dry-run` | Run everything, write nothing. |
 | `--keep-failed` | On a failed leak check, still write `<name>-scrubbed-UNSAFE.png` for debugging. |
