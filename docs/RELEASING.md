@@ -54,13 +54,14 @@ commits with those strings rewritten, ending on the same tree as `main` here.
   lives outside the repo at `~/.config/scrubshot/release-replace.txt` (one
   `old==>new` per line, git-filter-repo format):
   ```sh
+  SRC="$PWD"   # run from this repo's main checkout
   rm -rf /tmp/scrubshot-sync
-  git clone --no-local --single-branch --branch main <this repo> /tmp/scrubshot-sync
+  git clone --no-local --single-branch --branch main "$SRC" /tmp/scrubshot-sync
   cd /tmp/scrubshot-sync
   git filter-repo --force \
     --replace-text ~/.config/scrubshot/release-replace.txt \
     --replace-message ~/.config/scrubshot/release-replace.txt
-  test "$(git rev-parse HEAD^{tree})" = "$(git -C <this repo> rev-parse main^{tree})"
+  test "$(git rev-parse HEAD^{tree})" = "$(git -C "$SRC" rev-parse main^{tree})"
   git push --tags git@github.com:buddyh/scrubshot-release.git main
   ```
   The `test` line stops the sync if the rewritten tree differs from this repo's
