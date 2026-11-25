@@ -166,6 +166,9 @@ final class ServeApp: @unchecked Sendable {
         return lstat(path(name), &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
     }
 
+    /// Largest workspace file the server reads into memory (thumbnails, audits, scrubs, image views).
+    static let maxReadBytes: off_t = 256 << 20
+
     /// Read a regular file without following a symlink at the final path. The check and the read use one
     /// descriptor, so swapping the entry for a symlink after a listing cannot redirect the read.
     func readPlainFile(_ name: String) -> Data? {
@@ -174,7 +177,7 @@ final class ServeApp: @unchecked Sendable {
         if fd < 0 { return nil }
         defer { close(fd) }
         var st = stat()
-        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= Self.maxReadBytes else { return nil }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
     }
 
