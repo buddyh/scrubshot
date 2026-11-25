@@ -58,14 +58,15 @@ and do not copy it into files inside repos.
 3. **Dry run, check fit.**
    `scrubshot <img> -r - --no-default-rules --dry-run --json < rules.json`
    For each replacement, look at `render.widthDelta` (px; aim for within a few
-   pixels of 0), `render.scale` (below 0.9 means it was shrunk) and `warnings`.
+   pixels of 0), `render.scale` (below 1 means it was shrunk; below 0.9 adds a warning) and `warnings`.
    Adjust replacements that are far off and repeat.
 
 4. **Write it.**
-   `scrubshot <img> -r - --no-default-rules --report < rules.json`
+   `scrubshot <img> -r - --no-default-rules --json --report < rules.json`
    Output: `<name>-scrubbed.png` next to the input (or `-o path`). The input is
    never modified. Exit 2 means text was still readable and nothing was written:
-   read `leaks` in the JSON, add or fix rules, retry. Do not use `--keep-failed`
+   read `leaks` in the JSON on stdout (the report file has them too), add or fix
+   rules, retry. The report holds the original text, so keep it private. Do not use `--keep-failed`
    output for sharing.
 
 5. **Look at the result** (open the PNG) before telling the user it is ready.

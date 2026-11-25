@@ -2,10 +2,14 @@
 
 [![CI](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml/badge.svg)](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml)
 
-Replace sensitive text in screenshots so they're safe to post. Names of companies,
+Replace sensitive text in screenshots before you post them. Names of companies,
 clients, repos, products and people, plus emails and internal URLs, get swapped
 for fake text drawn in the same font, size, color and position. Everything else
 in the image stays exactly as it was.
+
+scrubshot is best effort. OCR can miss text, and it cannot replace what it does
+not read. Check every output by eye before you post it. See
+[SECURITY.md](SECURITY.md).
 
 ![Before and after: synthetic fixture](docs/demo.png)
 
@@ -21,17 +25,24 @@ in the image stays exactly as it was.
   and refuses to write it if any rule still matches, or if a redrawn area still
   reads as something one edit away from a replaced term. Exit code 2, no output.
 - **Never touches the input.** Output goes to `<name>-scrubbed.png` next to it,
-  or `-o path`. Metadata is stripped (only the color profile and DPI stay).
+  or `-o path`. Metadata is stripped. The PNG keeps only image-format data (palette,
+  transparency, color profile, gamma, DPI). Text, EXIF and other chunks are dropped.
 
-Requires macOS 14+ and Swift 6 (Xcode or Command Line Tools).
+Requires macOS 14+ and a Swift 6 toolchain (Xcode 16+ or matching Command Line
+Tools).
 
 ## Install
 
 ```sh
-git clone git@github.com:buddyh/scrubshot.git && cd scrubshot
+git clone https://github.com/buddyh/scrubshot.git && cd scrubshot
 make install          # swift build -c release, then copy to ~/.local/bin/scrubshot
 make install-skill    # optional: link the agent skill into ~/.claude/skills/scrubshot
 ```
+
+`make install` puts the binary in `~/.local/bin`. Use `make install PREFIX=/usr/local`
+to pick another prefix (the binary goes in `$PREFIX/bin`). If `scrubshot` is not
+found, add the folder to your PATH, for example
+`export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc`.
 
 The first run after a reboot can take a while (about 30s) while Vision loads its
 models. After that a screenshot takes under a second.
@@ -45,6 +56,7 @@ scrubshot a.png b.png -r work.json       # several files, extra rules
 scrubshot shot.png --replace 'Globex=Initech' --term 'person:Hank Scorpio'
 scrubshot shot.png --report              # also writes shot-scrubbed.report.json
 scrubshot shot.png --dry-run --json      # what would change, nothing written
+scrubshot rules-path                     # print the default rules file path
 ```
 
 | Option | Meaning |
@@ -52,9 +64,9 @@ scrubshot shot.png --dry-run --json      # what would change, nothing written
 | `-o, --output <path>` | Output file (one input only). |
 | `-r, --rules <file>` | Rules JSON, repeatable. The default file loads first unless `--no-default-rules`. |
 | `--replace a=b` | Literal replacement, case-insensitive. |
-| `--term [category:]text` | Stable fake replacement for `text`. |
+| `--term [category:]text` | Stable fake replacement for `text`. Categories: `company`, `person`, `product`, `repo`, `acronym`, `email`, `url`, `word` (the default). |
 | `--emails`, `--urls` (and `--no-…`) | Built-in detectors. |
-| `--report` | JSON next to the output: each original, replacement, box, font, color, fit. Never embedded in the image. |
+| `--report` | JSON next to the output: each original, replacement, box, font, color, fit. Never embedded in the image. It is also written when the leak check fails, and it holds the original text, so keep it private. |
 | `--json` | Machine-readable result on stdout. |
 | `--dry-run` | Run everything, write nothing. |
 | `--keep-failed` | On a failed leak check, still write `<name>-scrubbed-UNSAFE.png` for debugging. |
@@ -108,7 +120,7 @@ consistent names across a series. The loop:
    mistakes fail with the key or regex column named.
 3. `scrubshot shot.png -r - --dry-run --json < rules.json` returns, per replacement,
    `render.widthDelta` (px wider (+) or narrower (−) than the original),
-   `render.scale` (below 1 means it was shrunk to fit), the candidates tried,
+   `render.scale` (below 1 means it was shrunk to fit; below 0.9 adds a warning), the candidates tried,
    and warnings. The agent tunes any that are far off.
 4. Run without `--dry-run`. Exit 2 lists `leaks` to fix.
 
@@ -139,6 +151,9 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   confidence and the rule it matched.
 - The details panel lists each replacement with its font, size, width delta and
   fit error.
+- It lists only image files (png, jpg, jpeg, heic, tiff, tif, gif, bmp). It hides
+  `*-scrubbed` and `*-scrubbed-UNSAFE` outputs and dotfiles, and it rejects
+  uploads over 64 MB with a 413.
 - Agents keep using the CLI with `--report` in the same folder. The page polls,
   so their runs show up as they finish.
 - Big folders are fine. The rail loads small cached thumbnails (`/api/thumb`),
@@ -150,15 +165,21 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   ask first), the page shows a "waiting for access" banner instead of hanging.
   Allow access in the prompt and it recovers by itself.
 
-The server listens on 127.0.0.1 only and rejects other Host headers. Writes need
+The server listens on 127.0.0.1 only. It accepts the Host headers
+`127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name (with any
+port), and rejects all others. Writes need
 an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
 
-The server bounds its own load: at most 128 open connections, 8 ordinary requests
-handled at once plus 3 more for slow ones (thumbnails, OCR), and a client that goes quiet for 10 seconds before
-finishing its request gets a 408. When the queue is full it answers 503, so a
-burst of slow requests cannot hang the page.
+The server bounds its own load:
+
+- At most 128 open connections. More than that get a 503 at once.
+- 8 ordinary requests run at once. Thumbnails (`/api/thumb`) use a separate
+  lane of 3, so slow requests cannot starve the rest.
+- Each lane queues up to 256 waiting requests. After that it answers 503.
+- A client that goes quiet for 10 seconds before finishing its request gets a
+  408.
 
 To reach it from another device, put a local reverse proxy in front and pass its
 name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
@@ -174,7 +195,7 @@ binds 127.0.0.1; only requests carrying that Host header are added.
    CoreText glyph offsets, snapped to a fully blank pixel column.
 3. **Measure.** The background is the most common color around the word. The ink
    box is found by trimming and growing the Vision box. Each candidate font
-   (SF Pro in four weights, SF Mono, Helvetica Neue, Menlo) is sized to the ink
+   (SF Pro in four weights, SF Mono in three, Helvetica Neue in two, and Menlo) is sized to the ink
    width, aligned by coverage centroid to a quarter pixel, and scored by how well
    its rendered coverage explains the real pixels.
 4. **Agree.** Edits of similar size share one font (the lowest total error), and

@@ -22,11 +22,13 @@ network:
 
 - No network calls are made by the tool. OCR (Apple Vision) and drawing
   (CoreText) run on the Mac.
-- The `serve` web UI binds to `127.0.0.1` only and rejects requests whose Host
-  header does not match. Writes need a custom `X-Scrubshot` header, and file
+- The `serve` web UI binds to `127.0.0.1` only. It accepts the Host headers
+  `127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name, and
+  rejects all others. Writes need a custom `X-Scrubshot` header, and file
   names cannot leave the chosen folder.
-- `--host-alias` adds one extra Host header for a local reverse proxy. It does
-  not make the server reachable from the network by itself.
+- `--host-alias` adds one extra Host header name for a local reverse proxy. You
+  can repeat it, one per name. It does not make the server reachable from the
+  network by itself.
 
 Issues in the scope above are in scope for this policy. Issues in a reverse
 proxy, a browser, or macOS are out of scope and should go to those projects.
