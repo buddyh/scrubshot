@@ -792,7 +792,10 @@ function renderAll() {
 }
 
 /* ---------- actions ---------- */
+const CONFIRM_OVER = 20;
 async function scrubNew() {
+  const n = items().filter((i) => i.status === 'new').length;
+  if (n > CONFIRM_OVER && !confirm('Scrub ' + n + ' screenshots? They run one at a time and each can take a few seconds.')) return;
   try { await api('/api/scrub', { method: 'POST' }); } catch (e) { toast(e.message); }
   poll();
 }
