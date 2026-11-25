@@ -151,6 +151,9 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   confidence and the rule it matched.
 - The details panel lists each replacement with its font, size, width delta and
   fit error.
+- It lists only image files (png, jpg, jpeg, heic, tiff, tif, gif, bmp). It hides
+  `*-scrubbed` and `*-scrubbed-UNSAFE` outputs and dotfiles, and it rejects
+  uploads over 64 MB with a 413.
 - Agents keep using the CLI with `--report` in the same folder. The page polls,
   so their runs show up as they finish.
 - Big folders are fine. The rail loads small cached thumbnails (`/api/thumb`),
