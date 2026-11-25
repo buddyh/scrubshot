@@ -211,8 +211,9 @@ struct AuditResult: Codable { let schemaVersion: Int; let version: String; let i
 func estimateFontSize(lineHeight: Double) -> Double { (lineHeight / 1.2 * 2).rounded() / 2 }
 
 /// OCR one image and mark the spans the rules match.
-func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
-    let loaded = try ImageFile.load(URL(fileURLWithPath: path))
+/// `data`, when given, is the already-read file; `path` is then only used for naming.
+func auditImage(_ path: String, data: Data? = nil, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
+    let loaded = try data.map { try ImageFile.load(data: $0, name: path) } ?? ImageFile.load(URL(fileURLWithPath: path))
     let lines = OCR.lines(try OCR.recognize(loaded.image, scale: ocrScale))
     let out = lines.map { l in
         AuditLine(text: l.text, box: PixelRect(l.box),
@@ -280,13 +281,19 @@ func samePath(_ a: String, _ b: String) -> Bool {
         == URL(fileURLWithPath: b).standardizedFileURL.resolvingSymlinksInPath().path
 }
 
-func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
+/// `data`, when given, is the already-read input; `input` is then only used for naming the outputs.
+func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet, data: Data? = nil) -> FileResult {
     var r = FileResult(input: input, status: "error", replacements: [], leaks: [], warnings: [])
     do {
         let out = outputPath(for: input, explicit: c.output)
         if samePath(out, input) { throw CLIError(message: "refusing to overwrite the input \(input)") }
-        try requireReadable(input)
-        let loaded = try ImageFile.load(URL(fileURLWithPath: input))
+        let loaded: ImageFile.Loaded
+        if let data {
+            loaded = try ImageFile.load(data: data, name: input)
+        } else {
+            try requireReadable(input)
+            loaded = try ImageFile.load(URL(fileURLWithPath: input))
+        }
         let result = try Scrubber.scrub(loaded.image, options: ScrubOptions(
             rules: rules, ocrScale: c.ocrScale, verifyScales: c.verifyScales))
         r.replacements = result.replacements

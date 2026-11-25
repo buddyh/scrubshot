@@ -349,7 +349,9 @@ final class ServeApp: @unchecked Sendable {
         defer { lock.lock(); running = nil; generation += 1; lock.unlock() }
 
         let input = path(name)
-        guard isInputName(name), isPlainFile(name) else { setError(name, "input file is gone"); return }
+        // Read once through readPlainFile and scrub those bytes, so the entry can't be swapped for a symlink
+        // between the check and the decode.
+        guard isInputName(name), let bytes = readPlainFile(name) else { setError(name, "input file is gone"); return }
         guard !rules.rules.isEmpty else { setError(name, "no rules: pass --rules, --replace or --term, or add \(defaultRulesPath)"); return }
         // Remove this item's own earlier results so a failed re-run never leaves a stale output behind.
         for f in [outputName(name), unsafeName(name), reportName(name)] { try? FileManager.default.removeItem(atPath: path(f)) }
@@ -361,7 +363,7 @@ final class ServeApp: @unchecked Sendable {
         c.json = false
         c.dryRun = false
         c.keepFailed = false
-        var r = scrubOne(input, c, rules)
+        var r = scrubOne(input, c, rules, data: bytes)
         if r.status == "error" {
             setError(name, r.error ?? "unknown error")
             if r.report == nil {   // scrubOne writes no report on early errors; write one so the UI can show it
@@ -395,7 +397,10 @@ final class ServeApp: @unchecked Sendable {
             if let hit, hit.key == key {
                 result = .success(hit.json)
             } else {
-                result = Result { try encode(try auditImage(self.path(name), rules: self.rules, ocrScale: self.config.ocrScale)) }
+                result = Result {
+                    guard let bytes = self.readPlainFile(name) else { throw CLIError(message: "no such image") }
+                    return try encode(try auditImage(self.path(name), data: bytes, rules: self.rules, ocrScale: self.config.ocrScale))
+                }
                 if case .success(let json) = result {
                     self.lock.lock(); self.auditCache[name] = (key, json); self.lock.unlock()
                 }
