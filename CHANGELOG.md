@@ -49,6 +49,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `serve` scales to large folders: cached thumbnails, cached state with ETags,
   bounded connections and handlers, a read timeout, a 503 with a banner while
   macOS privacy access to the folder is pending, and a paged, filterable rail.
+- `serve` file safety: symlinks, FIFOs and other non-regular entries are never
+  listed, read or written through; each input is read once through a descriptor
+  that does not follow symlinks; reads stop at 256 MB; a request must arrive
+  within 30 seconds in total.
 
 ### Performance
 

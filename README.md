@@ -167,10 +167,10 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
 
 The server listens on 127.0.0.1 only. It accepts the Host headers
 `127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name (with any
-port), and rejects all others. Writes need
-an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
-same rules and options as `scrub`, and the same fail-closed check: a leak writes no
-output.
+port), and rejects all others. Writes need an `X-Scrubshot: 1` header, and file
+names can't leave the folder. Symlinks, FIFOs and other non-regular entries are
+skipped, and files over 256 MB are not read. It uses the same rules and options
+as `scrub`, and the same fail-closed check: a leak writes no output.
 
 The server bounds its own load:
 
@@ -179,7 +179,7 @@ The server bounds its own load:
   lane of 3, so slow requests cannot starve the rest.
 - Each lane queues up to 256 waiting requests. After that it answers 503.
 - A client that goes quiet for 10 seconds before finishing its request gets a
-  408.
+  408. So does one that takes more than 30 seconds in total to send it.
 
 To reach it from another device, put a local reverse proxy in front and pass its
 name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
@@ -195,8 +195,8 @@ binds 127.0.0.1; only requests carrying that Host header are added.
    CoreText glyph offsets, snapped to a fully blank pixel column.
 3. **Measure.** The background is the most common color around the word. The ink
    box is found by trimming and growing the Vision box. Each candidate font
-   (SF Pro in four weights, SF Mono in three, Helvetica Neue in two, and Menlo) is sized to the ink
-   width, aligned by coverage centroid to a quarter pixel, and scored by how well
+   (SF Pro in four weights, SF Mono in three, Helvetica Neue in two, and Menlo)
+   is sized to the ink width, aligned by coverage centroid to a quarter pixel, and scored by how well
    its rendered coverage explains the real pixels.
 4. **Agree.** Edits of similar size share one font (the lowest total error), and
    near-equal sizes snap to their median, so short words like `GLXIA` follow the
