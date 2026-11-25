@@ -13,20 +13,34 @@ public enum ImageFile {
     }
 
     public static func load(_ url: URL) throws -> Loaded {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
-            throw ScrubError.imageDecode(url.path)
+        let path = url.path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
+            throw ScrubError.imageDecode("\(path) does not exist")
         }
-        guard CGImageSourceGetCount(src) >= 1,
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            throw ScrubError.imageDecode("\(url.path) has no image")
+        if isDir.boolValue { throw ScrubError.imageDecode("\(path) is a directory, not an image file") }
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            throw ScrubError.imageDecode("\(path) is not readable (check file permissions)")
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
+        if size == 0 { throw ScrubError.imageDecode("\(path) is empty") }
+
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            throw ScrubError.imageDecode("\(path) is not a supported image (PNG, JPEG, HEIC, TIFF, GIF, ...)")
+        }
+        guard CGImageSourceGetStatus(src) == .statusComplete || CGImageSourceGetStatus(src) == .statusIncomplete,
+              CGImageSourceGetCount(src) >= 1 else {
+            throw ScrubError.imageDecode("\(path) has no readable image")
+        }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        guard let decoded = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            throw ScrubError.imageDecode("\(path) could not be decoded (damaged or unsupported)")
         }
         var dpi: (Double, Double)?
-        if let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-           let dx = props[kCGImagePropertyDPIWidth] as? Double,
-           let dy = props[kCGImagePropertyDPIHeight] as? Double {
+        if let dx = props?[kCGImagePropertyDPIWidth] as? Double, let dy = props?[kCGImagePropertyDPIHeight] as? Double {
             dpi = (dx, dy)
         }
-        return Loaded(image: img, dpi: dpi)
+        return Loaded(image: decoded, dpi: dpi)
     }
 
     public static func pngData(_ image: CGImage, dpi: (Double, Double)?) throws -> Data {
