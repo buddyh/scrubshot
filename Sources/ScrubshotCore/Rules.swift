@@ -94,6 +94,8 @@ public struct RuleMatch: Equatable {
     public let original: String
     public var replacement: String
     public let rule: String
+    /// The rule's category (company, person, email, ...), when it has one.
+    public var category: String? = nil
     /// All candidate texts when the rule has a candidate list; `replacement` is the first.
     public var candidates: [String]? = nil
 }
@@ -106,12 +108,16 @@ public struct Rule {
     public let kind: Kind
     public let replacement: Replacement
     public let caseSensitive: Bool
+    /// Kind of thing the rule hides: the spec's category, or "email" / "url" for detectors.
+    public let category: String?
     let compiled: NSRegularExpression
     /// Literal rules match on folded text (lowercase, OCR look-alikes merged).
     let folded: Bool
 
-    public init(id: String, kind: Kind, replacement: Replacement, wholeWord: Bool = false, caseSensitive: Bool = false) throws {
+    public init(id: String, kind: Kind, replacement: Replacement, wholeWord: Bool = false, caseSensitive: Bool = false,
+                category: String? = nil) throws {
         self.id = id
+        self.category = category ?? { if case .detector(let n, _) = kind { return n } else { return nil } }()
         self.kind = kind
         self.replacement = replacement
         self.caseSensitive = caseSensitive
@@ -165,7 +171,7 @@ public struct Rule {
                     replacement = Pseudonym.make(for: original, category: cat, seed: Rule.fold(original))
                 }
             }
-            out.append(RuleMatch(range: m.range, original: original, replacement: replacement, rule: id, candidates: candidates))
+            out.append(RuleMatch(range: m.range, original: original, replacement: replacement, rule: id, category: category, candidates: candidates))
         }
         return out
     }
@@ -267,14 +273,14 @@ public struct RuleSet {
                 let why = RulesValidation.diagnose(re).map { ": \($0)" } ?? ""
                 throw ScrubError.rules("\(id): bad regex \"\(re)\"\(why)")
             }
-            return try Rule(id: id, kind: .regex(regex), replacement: replacement, caseSensitive: cs)
+            return try Rule(id: id, kind: .regex(regex), replacement: replacement, caseSensitive: cs, category: s.category?.rawValue)
         }
         var terms = s.terms ?? []
         if let t = s.term { terms.insert(t, at: 0) }
         terms = terms.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         if terms.isEmpty { throw ScrubError.rules("\(id): needs term, terms or regex") }
         return try Rule(id: id, kind: .literal(terms), replacement: replacement,
-                        wholeWord: s.wholeWord ?? false, caseSensitive: cs)
+                        wholeWord: s.wholeWord ?? false, caseSensitive: cs, category: s.category?.rawValue)
     }
 
     /// All non-overlapping matches in a line. Earlier start wins, then the longer match,
