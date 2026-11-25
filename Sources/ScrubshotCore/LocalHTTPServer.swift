@@ -123,6 +123,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
         public var maxQueued = 256
         /// Seconds a client may stay silent before the request is complete.
         public var readTimeout: TimeInterval = 10
+        /// Seconds a response may take to send before the connection is dropped (a client that stops reading).
+        public var writeTimeout: TimeInterval = 30
         public init() {}
     }
 
@@ -287,26 +289,36 @@ public final class LocalHTTPServer: @unchecked Sendable {
         .json("{\"error\":\"\(message)\"}", status: status)
     }
 
-    /// Mark the connection closed once and free its slot. Returns false when it was already closed.
+    /// Mark the connection closed once. Returns false when it was already closed.
     private func markClosed(_ c: Conn) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         if c.closed { return false }
         c.closed = true
-        if c.counted { openConnections -= 1 }
         return true
+    }
+
+    /// Free the connection's slot once its socket is done.
+    private func release(_ c: Conn) {
+        lock.lock()
+        if c.counted { c.counted = false; openConnections -= 1 }
+        lock.unlock()
     }
 
     private func close(_ c: Conn) {
         guard markClosed(c) else { return }
         c.timer?.cancel()
         c.nw.cancel()
+        release(c)
     }
 
+    /// The slot stays taken until the response is written, so the cap counts sockets still sending.
     private func send(_ c: Conn, _ response: HTTPResponse) {
         guard markClosed(c) else { return }
         c.timer?.cancel()
+        let stalled = DispatchWorkItem { [self] in c.nw.cancel(); release(c) }
+        queue.asyncAfter(deadline: .now() + limits.writeTimeout, execute: stalled)
         c.nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
-                  completion: .contentProcessed { _ in c.nw.cancel() })
+                  completion: .contentProcessed { [self] _ in stalled.cancel(); c.nw.cancel(); release(c) })
     }
 }
