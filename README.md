@@ -179,7 +179,7 @@ The server bounds its own load:
   lane of 3, so slow requests cannot starve the rest.
 - Each lane queues up to 256 waiting requests. After that it answers 503.
 - A client that goes quiet for 10 seconds before finishing its request gets a
-  408.
+  408. So does one that takes more than 30 seconds in total to send it.
 
 To reach it from another device, put a local reverse proxy in front and pass its
 name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
