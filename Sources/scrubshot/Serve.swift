@@ -169,7 +169,8 @@ final class ServeApp: @unchecked Sendable {
     /// Read a regular file without following a symlink at the final path. The check and the read use one
     /// descriptor, so swapping the entry for a symlink after a listing cannot redirect the read.
     func readPlainFile(_ name: String) -> Data? {
-        let fd = open(path(name), O_RDONLY | O_NOFOLLOW)
+        // O_NONBLOCK so a FIFO or device entry can't hang the worker before fstat rejects it.
+        let fd = open(path(name), O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         if fd < 0 { return nil }
         defer { close(fd) }
         var st = stat()
