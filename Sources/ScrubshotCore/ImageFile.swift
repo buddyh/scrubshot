@@ -16,7 +16,8 @@ public enum ImageFile {
     /// the pipeline keeps a few copies, so 100 MP is roughly 1.5 GB of memory.
     public static let maxPixels = 100_000_000
 
-    /// Reads the first (and only) frame.
+    /// Reads the first (and only) frame. EXIF orientation is applied to the pixels, so
+    /// the output, which carries no EXIF, looks the same as the input did.
     /// Multi-frame files (animated GIF, multi-page TIFF) are refused, not truncated.
     public static func load(_ url: URL) throws -> Loaded {
         let path = url.path
@@ -57,7 +58,13 @@ public enum ImageFile {
         if let dx = props?[kCGImagePropertyDPIWidth] as? Double, let dy = props?[kCGImagePropertyDPIHeight] as? Double {
             dpi = (dx, dy)
         }
-        return Loaded(image: decoded, dpi: dpi)
+        var image = decoded
+        let orientation = (props?[kCGImagePropertyOrientation] as? UInt32) ?? 1
+        if (2...8).contains(orientation) {
+            image = try Bitmap(image: decoded).oriented(orientation).makeImage()
+            if orientation >= 5, let d = dpi { dpi = (d.1, d.0) }
+        }
+        return Loaded(image: image, dpi: dpi)
     }
 
     public static func pngData(_ image: CGImage, dpi: (Double, Double)?) throws -> Data {

@@ -92,6 +92,35 @@ public final class Bitmap {
         return img
     }
 
+    /// Applies an EXIF orientation (2...8) by moving whole pixels, so nothing is resampled.
+    public func oriented(_ orientation: UInt32) -> Bitmap {
+        guard (2...8).contains(orientation) else { return self }
+        let swap = orientation >= 5
+        let out = Bitmap(width: swap ? height : width, height: swap ? width : height, colorSpace: colorSpace)
+        let w = width, h = height
+        data.withUnsafeBytes { src in
+            out.data.withUnsafeMutableBytes { dst in
+                let s = src.bindMemory(to: UInt32.self), d = dst.bindMemory(to: UInt32.self)
+                for y in 0..<h {
+                    for x in 0..<w {
+                        let nx: Int, ny: Int
+                        switch orientation {
+                        case 2: (nx, ny) = (w - 1 - x, y)
+                        case 3: (nx, ny) = (w - 1 - x, h - 1 - y)
+                        case 4: (nx, ny) = (x, h - 1 - y)
+                        case 5: (nx, ny) = (y, x)
+                        case 6: (nx, ny) = (h - 1 - y, x)
+                        case 7: (nx, ny) = (h - 1 - y, w - 1 - x)
+                        default: (nx, ny) = (y, w - 1 - x)
+                        }
+                        d[ny * out.width + nx] = s[y * w + x]
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     /// Pixel rectangle clamped to the bitmap.
     public func clamp(_ r: PixelRect) -> PixelRect {
         let x0 = max(0, r.x0), y0 = max(0, r.y0)
