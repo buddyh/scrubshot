@@ -92,8 +92,8 @@ public struct HTTPResponse {
         HTTPResponse(status: status, headers: ["Content-Type": contentType], body: data)
     }
 
-    static let reasons = [200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
-                          413: "Payload Too Large", 500: "Internal Server Error"]
+    static let reasons = [200: "OK", 304: "Not Modified", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
+                          408: "Request Timeout", 413: "Payload Too Large", 500: "Internal Server Error", 503: "Service Unavailable"]
 
     func serialized() -> Data {
         var h = headers
@@ -109,18 +109,71 @@ public struct HTTPResponse {
 public final class LocalHTTPServer: @unchecked Sendable {
     public struct StartError: Error, CustomStringConvertible { public let description: String }
 
-    private let handler: (HTTPRequest) -> HTTPResponse
+    /// Bounds that keep a few slow or idle clients from using up every thread.
+    public struct Limits {
+        /// Open connections. More than this get an immediate 503.
+        public var maxConnections = 128
+        /// Handler calls running at once for ordinary requests. A handler counts until it returns,
+        /// not until it responds.
+        public var maxConcurrent = 8
+        /// Handler calls running at once for requests `isHeavy` picks. This is a separate lane, so
+        /// slow requests cannot starve the rest: at most `maxConcurrent + maxHeavy` handlers run in total.
+        public var maxHeavy = 3
+        /// Parsed requests waiting for a free slot, per lane. More than this get a 503.
+        public var maxQueued = 256
+        /// Seconds a client may stay silent before the request is complete.
+        public var readTimeout: TimeInterval = 10
+        public init() {}
+    }
+
+    public typealias Responder = (HTTPResponse) -> Void
+
+    private let handler: (HTTPRequest, @escaping Responder) -> Void
+    private let isHeavy: (HTTPRequest) -> Bool
     private let maxBody: Int
+    private let limits: Limits
     private let queue = DispatchQueue(label: "scrubshot.http")
+    private let work = DispatchQueue(label: "scrubshot.http.work", attributes: .concurrent)
+    private let lock = NSLock()
+    private var openConnections = 0
+    private let normalLane: Lane
+    private let heavyLane: Lane
     private var listener: NWListener?
     /// The bound port. Set by `start`.
     public private(set) var port: Int
 
-    /// `port` 0 picks a free port. The handler runs on a global queue, never the main thread.
-    public init(port: Int, maxBody: Int, handler: @escaping (HTTPRequest) -> HTTPResponse) {
+    private final class Lane {
+        let max: Int
+        var active = 0
+        var pending: [() -> Void] = []
+        init(max: Int) { self.max = max }
+    }
+
+    private final class Conn {
+        let nw: NWConnection
+        var timer: DispatchWorkItem?
+        var closed = false
+        var counted = true
+        init(_ nw: NWConnection) { self.nw = nw }
+    }
+
+    /// `port` 0 picks a free port. The handler may answer later, from any thread, by calling the responder once.
+    /// It must not block waiting for slow work: hand that to another queue and call the responder when done.
+    public init(port: Int, maxBody: Int, limits: Limits = Limits(), isHeavy: @escaping (HTTPRequest) -> Bool = { _ in false },
+                asyncHandler: @escaping (HTTPRequest, @escaping Responder) -> Void) {
         self.port = port
         self.maxBody = maxBody
-        self.handler = handler
+        self.limits = limits
+        self.isHeavy = isHeavy
+        self.handler = asyncHandler
+        self.normalLane = Lane(max: max(1, limits.maxConcurrent))
+        self.heavyLane = Lane(max: max(1, limits.maxHeavy))
+    }
+
+    /// A handler that answers before it returns.
+    public convenience init(port: Int, maxBody: Int, limits: Limits = Limits(), isHeavy: @escaping (HTTPRequest) -> Bool = { _ in false },
+                            handler: @escaping (HTTPRequest) -> HTTPResponse) {
+        self.init(port: port, maxBody: maxBody, limits: limits, isHeavy: isHeavy) { req, respond in respond(handler(req)) }
     }
 
     /// Bind 127.0.0.1 and start accepting. Returns once the listener is ready.
@@ -141,10 +194,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
             default: break
             }
         }
-        l.newConnectionHandler = { [weak self] conn in
-            conn.start(queue: self?.queue ?? .global())
-            self?.receive(conn, Data())
-        }
+        l.newConnectionHandler = { [weak self] nw in self?.accept(nw) }
         l.start(queue: queue)
         if ready.wait(timeout: .now() + 5) == .timedOut { l.cancel(); throw StartError(description: "listener did not start") }
         if let failure { l.cancel(); throw StartError(description: "cannot listen on 127.0.0.1:\(port): \(failure)") }
@@ -158,20 +208,77 @@ public final class LocalHTTPServer: @unchecked Sendable {
         listener = nil
     }
 
-    private func receive(_ conn: NWConnection, _ buffer: Data) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, isComplete, error in
+    private func accept(_ nw: NWConnection) {
+        let c = Conn(nw)
+        lock.lock()
+        let over = openConnections >= limits.maxConnections
+        if !over { openConnections += 1 }
+        lock.unlock()
+        nw.start(queue: queue)
+        if over {
+            c.counted = false
+            send(c, Self.failure(503, "too many connections"))
+            return
+        }
+        arm(c)
+        receive(c, Data())
+    }
+
+    /// Close the connection with a 408 when the client goes quiet before sending a whole request.
+    private func arm(_ c: Conn) {
+        c.timer?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.send(c, Self.failure(408, "request timed out")) }
+        c.timer = item
+        queue.asyncAfter(deadline: .now() + limits.readTimeout, execute: item)
+    }
+
+    private func receive(_ c: Conn, _ buffer: Data) {
+        c.nw.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buf = buffer
             if let data { buf.append(data) }
             switch HTTPRequest.parse(buf, maxBody: self.maxBody) {
             case .needMore:
-                if error != nil || isComplete { conn.cancel() } else { self.receive(conn, buf) }
+                if error != nil || isComplete { self.close(c) } else { self.arm(c); self.receive(c, buf) }
             case .request(let req, _):
-                DispatchQueue.global().async { self.send(conn, self.handler(req)) }
+                c.timer?.cancel()
+                self.dispatch(req, on: c)
             case .tooLarge:
-                self.send(conn, Self.failure(413, "request too large"))
+                self.send(c, Self.failure(413, "request too large"))
             case .bad:
-                self.send(conn, Self.failure(400, "bad request"))
+                self.send(c, Self.failure(400, "bad request"))
+            }
+        }
+    }
+
+    private func dispatch(_ req: HTTPRequest, on c: Conn) {
+        let lane = isHeavy(req) ? heavyLane : normalLane
+        let job: () -> Void = { [self] in handler(req) { [self] response in send(c, response) } }
+        lock.lock()
+        if lane.active < lane.max {
+            lane.active += 1
+            lock.unlock()
+            run(lane, job)
+        } else if lane.pending.count < limits.maxQueued {
+            lane.pending.append(job)
+            lock.unlock()
+        } else {
+            lock.unlock()
+            send(c, Self.failure(503, "server busy"))
+        }
+    }
+
+    private func run(_ lane: Lane, _ job: @escaping () -> Void) {
+        work.async { [self] in
+            job()
+            lock.lock()
+            if lane.pending.isEmpty {
+                lane.active -= 1
+                lock.unlock()
+            } else {
+                let next = lane.pending.removeFirst()
+                lock.unlock()
+                run(lane, next)
             }
         }
     }
@@ -180,8 +287,26 @@ public final class LocalHTTPServer: @unchecked Sendable {
         .json("{\"error\":\"\(message)\"}", status: status)
     }
 
-    private func send(_ conn: NWConnection, _ response: HTTPResponse) {
-        conn.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
-                  completion: .contentProcessed { _ in conn.cancel() })
+    /// Mark the connection closed once and free its slot. Returns false when it was already closed.
+    private func markClosed(_ c: Conn) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if c.closed { return false }
+        c.closed = true
+        if c.counted { openConnections -= 1 }
+        return true
+    }
+
+    private func close(_ c: Conn) {
+        guard markClosed(c) else { return }
+        c.timer?.cancel()
+        c.nw.cancel()
+    }
+
+    private func send(_ c: Conn, _ response: HTTPResponse) {
+        guard markClosed(c) else { return }
+        c.timer?.cancel()
+        c.nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
+                  completion: .contentProcessed { _ in c.nw.cancel() })
     }
 }

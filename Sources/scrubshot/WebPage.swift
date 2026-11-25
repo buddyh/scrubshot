@@ -94,12 +94,19 @@ svg.i { width: 14px; height: 14px; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .offline { color: var(--leak); font-size: 12px; display: none; }
 .offline.on { display: inline; }
+.banner { display: none; padding: 10px 14px; background: var(--warn); color: #fff; font-size: 14px; font-weight: 600; }
+.banner.on { display: block; }
+.banner small { display: block; font-weight: 400; opacity: 0.9; margin-top: 2px; }
 
 /* layout */
 .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
 .rail { min-height: 0; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
 .rail-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .rail-head h2 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.rail-filter { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.rail-filter input { width: 100%; font: inherit; color: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+.rail-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-more { padding: 10px; text-align: center; }
 .rail-list { flex: 1; min-height: 0; overflow: auto; }
 .rail-foot { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .rail-empty { padding: 18px 12px; color: var(--muted); line-height: 1.5; }
@@ -240,6 +247,7 @@ tr.skipped td { color: var(--muted); }
   <span class="offline" id="offline">Server unreachable</span>
   <button class="primary" id="scrubNew" type="button"></button>
 </header>
+<div class="banner" id="banner" role="alert"></div>
 <div class="layout">
   <aside class="rail">
     <div class="rail-head">
@@ -247,6 +255,7 @@ tr.skipped td { color: var(--muted); }
       <button id="pick" type="button"></button>
       <input id="file" type="file" accept="image/*,.heic,.tif,.tiff" multiple hidden>
     </div>
+    <div class="rail-filter"><input id="filter" type="search" placeholder="Filter by name or status" aria-label="Filter images" autocomplete="off"></div>
     <div class="rail-list" id="list"></div>
     <div class="rail-foot">j / k or arrow keys to move. Drop images anywhere to add.</div>
   </aside>
@@ -322,6 +331,8 @@ const S = {
   zoom: store.get('zoom', 'fit'),
   edits: store.get('edits', '1') === '1',
   slider: 50,
+  filter: '',
+  limit: 100,
   audits: new Map(),
   online: true
 };
@@ -329,16 +340,23 @@ if (!['side', 'slider', 'ocr'].includes(S.mode)) S.mode = 'side';
 if (!['fit', '1', '2'].includes(S.zoom)) S.zoom = 'fit';
 
 /* ---------- api + toast ---------- */
+const NOT_MODIFIED = Symbol('not modified');
 async function api(path, opts) {
   const o = Object.assign({ cache: 'no-store' }, opts || {});
   o.headers = Object.assign({}, o.headers || {});
   if (o.method === 'POST') o.headers['X-Scrubshot'] = '1';
   const r = await fetch(path, o);
+  if (r.status === 304) return NOT_MODIFIED;
+  if (r.headers.get('etag')) api.etag = r.headers.get('etag').replace(/"/g, '');
   let body = null;
   if ((r.headers.get('content-type') || '').includes('json')) {
     try { body = await r.json(); } catch (e) { body = null; }
   }
-  if (!r.ok) throw new Error((body && body.error) || (r.status + ' ' + r.statusText));
+  if (!r.ok) {
+    const err = new Error((body && body.error) || (r.status + ' ' + r.statusText));
+    err.status = r.status;
+    throw err;
+  }
   return body;
 }
 function toast(msg) {
@@ -350,7 +368,18 @@ function toast(msg) {
 
 /* ---------- helpers ---------- */
 const imgUrl = (name, v) => '/api/image?name=' + enc(name) + '&v=' + enc(v == null ? '' : v);
+const thumbUrl = (name, v) => '/api/thumb?name=' + enc(name) + '&w=160&v=' + enc(v == null ? '' : v);
 const items = () => (S.data && S.data.items) || [];
+const PAGE = 100;
+// Items the filter box lets through: every word must match the name or the status.
+function visibleItems() {
+  const words = S.filter.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return items();
+  return items().filter((i) => {
+    const name = i.name.toLowerCase();
+    return words.every((w) => name.includes(w) || i.status.startsWith(w));
+  });
+}
 const current = () => items().find((i) => i.name === S.sel) || null;
 const pct = (v, total) => (total ? (v / total * 100) : 0) + '%';
 function boxStyle(b, W, H) {
@@ -395,7 +424,8 @@ function renderHeader() {
   const b = $('#scrubNew');
   b.replaceChildren(icon('play'), 'Scrub new' + (n ? ' (' + n + ')' : ''));
   b.disabled = n === 0;
-  $('#count').textContent = items().length ? '(' + items().length + ')' : '';
+  const total = items().length, vis = visibleItems().length;
+  $('#count').textContent = total ? '(' + (vis === total ? total : vis + ' of ' + total) + ')' : '';
 }
 
 /* ---------- rail ---------- */
@@ -411,10 +441,13 @@ function makeRow(name) {
 }
 function renderRail() {
   const list = $('#list');
-  const its = items();
+  const vis = visibleItems();
+  const its = vis.slice(0, S.limit);
   if (!its.length) {
     rows.clear();
-    list.replaceChildren(h('div', { class: 'rail-empty' }, 'No images yet. Drop screenshots anywhere on this page, or add them to the workspace folder.'));
+    list.replaceChildren(h('div', { class: 'rail-empty' }, items().length
+      ? 'No images match "' + S.filter + '".'
+      : 'No images yet. Drop screenshots anywhere on this page, or add them to the workspace folder.'));
     return;
   }
   if (list.firstChild && list.firstChild.classList.contains('rail-empty')) list.replaceChildren();
@@ -438,26 +471,52 @@ function renderRail() {
       const lk = it.report && it.report.leaks ? it.report.leaks.length : 0;
       c.textContent = lk ? lk + ' leaked' : (it.report ? n + ' replaced' : '');
     }
-    if (r.v !== it.updated) { r.v = it.updated; r.img.src = imgUrl(it.name, it.updated); }
+    if (r.v !== it.updated) { r.v = it.updated; r.img.src = thumbUrl(it.name, it.updated); }
     ordered.push(r.el);
   }
   for (const [name, r] of rows) {
     if (!seen.has(name)) { r.el.remove(); rows.delete(name); }
   }
+  if (vis.length > its.length) {
+    ordered.push(h('div', { class: 'rail-more' }, h('button', { type: 'button', onclick: showMore },
+      'Show more (' + (vis.length - its.length) + ' left)')));
+  }
   const cur = Array.from(list.children);
   if (cur.length !== ordered.length || cur.some((e, i) => e !== ordered[i])) list.replaceChildren(...ordered);
 }
 
+function showMore() {
+  S.limit += PAGE;
+  renderRail();
+}
+$('#list').addEventListener('scroll', (e) => {
+  const l = e.currentTarget;
+  // The rail scrolls down on wide screens and sideways in the narrow layout; only an axis that overflows counts.
+  const down = l.scrollHeight > l.clientHeight && l.scrollHeight - l.scrollTop - l.clientHeight < 300;
+  const side = l.scrollWidth > l.clientWidth && l.scrollWidth - l.scrollLeft - l.clientWidth < 300;
+  const nearEnd = down || side;
+  if (nearEnd && visibleItems().length > S.limit) showMore();
+}, { passive: true });
+$('#filter').addEventListener('input', (e) => {
+  S.filter = e.target.value;
+  S.limit = PAGE;
+  $('#list').scrollTop = 0;
+  renderHeader();
+  renderRail();
+});
+
 function select(name) {
   if (S.sel === name) return;
   S.sel = name;
+  const idx = visibleItems().findIndex((x) => x.name === name);
+  if (idx >= S.limit) S.limit = idx + PAGE;
   renderRail();
   renderMain();
   const r = rows.get(name);
   if (r) r.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 function move(d) {
-  const its = items();
+  const its = visibleItems();
   if (!its.length) return;
   let i = its.findIndex((x) => x.name === S.sel);
   i = Math.max(0, Math.min(its.length - 1, (i < 0 ? 0 : i + d)));
@@ -780,7 +839,10 @@ function renderAll() {
 }
 
 /* ---------- actions ---------- */
+const CONFIRM_OVER = 20;
 async function scrubNew() {
+  const n = items().filter((i) => i.status === 'new').length;
+  if (n > CONFIRM_OVER && !confirm('Scrub ' + n + ' screenshots? They run one at a time and each can take a few seconds.')) return;
   try { await api('/api/scrub', { method: 'POST' }); } catch (e) { toast(e.message); }
   poll();
 }
@@ -804,17 +866,34 @@ async function upload(files) {
 }
 
 /* ---------- polling ---------- */
+function setBanner(msg) {
+  const b = $('#banner');
+  b.classList.toggle('on', !!msg);
+  if (msg) b.replaceChildren(msg, h('small', null, 'Allow access when macOS asks. This page retries on its own.'));
+  else b.replaceChildren();
+}
 let polling = false;
 async function poll() {
   if (polling) return;
   polling = true;
   try {
-    const d = await api('/api/state');
+    const d = await api('/api/state' + (S.etag ? '?since=' + enc(S.etag) : ''));
     S.online = true;
+    setBanner('');
+    if (d === NOT_MODIFIED) { renderHeader(); return; }
+    S.etag = api.etag || null;
     S.data = d;
     if (!current()) S.sel = d.items && d.items.length ? d.items[0].name : null;
     renderAll();
   } catch (e) {
+    if (e.status === 503) {
+      // The server is up but cannot list the folder yet (macOS may be asking for access).
+      S.online = true;
+      setBanner(e.message);
+      renderHeader();
+      return;
+    }
+    setBanner('');
     if (S.online) toast('Server: ' + e.message);
     S.online = false;
     renderHeader();
@@ -858,7 +937,8 @@ window.addEventListener('keydown', (e) => {
 renderMain();
 renderHeader();
 poll();
-setInterval(poll, 1500);
+setInterval(() => { if (!document.hidden) poll(); }, 1500);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 })();
 </script>
 </body>

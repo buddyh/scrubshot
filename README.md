@@ -132,11 +132,24 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   fit error.
 - Agents keep using the CLI with `--report` in the same folder. The page polls,
   so their runs show up as they finish.
+- Big folders are fine. The rail loads small cached thumbnails (`/api/thumb`),
+  shows the first 100 rows and loads more as you scroll, and a filter box matches
+  name words or a status (`leak`, `new`). "Scrub new" asks first when it would
+  queue more than 20 screenshots. The page asks for state with an ETag, so a poll
+  that changes nothing costs almost nothing.
+- If macOS is holding back access to the folder (Desktop, Documents and Downloads
+  ask first), the page shows a "waiting for access" banner instead of hanging.
+  Allow access in the prompt and it recovers by itself.
 
 The server listens on 127.0.0.1 only and rejects other Host headers. Writes need
 an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
+
+The server bounds its own load: at most 128 open connections, 8 ordinary requests
+handled at once plus 3 more for slow ones (thumbnails, OCR), and a client that goes quiet for 10 seconds before
+finishing its request gets a 408. When the queue is full it answers 503, so a
+burst of slow requests cannot hang the page.
 
 To reach it from another device, put a local reverse proxy in front and pass its
 name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
