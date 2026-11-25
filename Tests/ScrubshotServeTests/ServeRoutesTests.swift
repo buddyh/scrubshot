@@ -115,6 +115,14 @@ final class ServeRoutesTests: XCTestCase {
         XCTAssertFalse(app.isPlainFile("x.png"))
     }
 
+    func testFIFOEntryIsRefusedWithoutBlocking() throws {
+        XCTAssertEqual(mkfifo(dir + "/pipe.png", 0o600), 0)
+        let start = Date()
+        XCTAssertNil(app.readPlainFile("pipe.png"))
+        XCTAssertEqual(app.handle(req("/api/image", query: ["name": "pipe.png"])).status, 404)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "opening a FIFO blocked")
+    }
+
     func testUploadDoesNotWriteThroughPlantedSymlink() throws {
         let target = outside + "/target.png"
         try FileManager.default.createSymbolicLink(atPath: dir + "/a.png", withDestinationPath: target)
