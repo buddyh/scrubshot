@@ -42,6 +42,20 @@ public enum ImageFile {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
             throw ScrubError.imageDecode("\(path) is not a supported image (PNG, JPEG, HEIC, TIFF, GIF, ...)")
         }
+        return try decode(src, path: path)
+    }
+
+    /// Same as `load(_:)`, for bytes the caller already read (for example through a descriptor
+    /// opened without following symlinks). `name` is only used in error messages.
+    public static func load(data: Data, name: String) throws -> Loaded {
+        if data.isEmpty { throw ScrubError.imageDecode("\(name) is empty") }
+        guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            throw ScrubError.imageDecode("\(name) is not a supported image (PNG, JPEG, HEIC, TIFF, GIF, ...)")
+        }
+        return try decode(src, path: name)
+    }
+
+    private static func decode(_ src: CGImageSource, path: String) throws -> Loaded {
         guard CGImageSourceGetStatus(src) == .statusComplete || CGImageSourceGetStatus(src) == .statusIncomplete,
               CGImageSourceGetCount(src) >= 1 else {
             throw ScrubError.imageDecode("\(path) has no readable image")
