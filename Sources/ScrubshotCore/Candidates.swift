@@ -60,6 +60,12 @@ extension Scrubber {
                     plan[i].matches[mi].replacement = all[j]
                 }
             }
+            // Continuation pieces of a match split across OCR boxes draw nothing, but their
+            // records must still name the chosen candidate.
+            for mi in plan[i].matches.indices {
+                let m = plan[i].matches[mi]
+                if let all = m.candidates { plan[i].matches[mi].replacement = all[picked[m.rule] ?? 0] }
+            }
             plan[i].recompose()
             analyses[i]?.request.newText = plan[i].newText
         }
