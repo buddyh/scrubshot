@@ -178,7 +178,9 @@ final class ServeApp: @unchecked Sendable {
         defer { close(fd) }
         var st = stat()
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= Self.maxReadBytes else { return nil }
-        return FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
+        // Read at most one byte past the cap, so a file that grows after fstat is still refused.
+        let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readData(ofLength: Int(Self.maxReadBytes) + 1)
+        return data.count > Int(Self.maxReadBytes) ? nil : data
     }
 
     func outputName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil) as NSString).lastPathComponent }
