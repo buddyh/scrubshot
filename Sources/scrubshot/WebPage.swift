@@ -71,9 +71,6 @@ button {
 button:hover:not(:disabled) { border-color: var(--muted); }
 button:disabled { opacity: 0.45; cursor: default; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--accent); }
-@media (prefers-color-scheme: dark) { button.primary { color: #0b1420; } }
 .mono { font-family: var(--mono); font-size: 12px; }
 .muted { color: var(--muted); }
 svg.i { width: 14px; height: 14px; flex: none; }
@@ -245,7 +242,6 @@ tr.skipped td { color: var(--muted); }
   <span class="chip" id="rules"></span>
   <span class="busy" id="busy"><i class="spin"></i>Working</span>
   <span class="offline" id="offline">Server unreachable</span>
-  <button class="primary" id="scrubNew" type="button"></button>
 </header>
 <div class="banner" id="banner" role="alert"></div>
 <div class="layout">
@@ -308,7 +304,6 @@ function h(tag, attrs, ...kids) {
 
 const ICONS = {
   add: '<path d="M8 3v10M3 8h10"/>',
-  play: '<path d="M4.5 3l8 5-8 5z"/>',
   redo: '<path d="M13 8a5 5 0 1 1-1.8-3.8M13 2.5V5h-2.5"/>',
   arrows: '<path d="M2 8h12M5 5L2 8l3 3M11 5l3 3-3 3"/>'
 };
@@ -420,10 +415,6 @@ function renderHeader() {
   rs.textContent = (rc == null ? 0 : rc) + (rc === 1 ? ' rule' : ' rules');
   rs.title = ((d.rules && d.rules.sources) || []).join('\n');
   $('#busy').classList.toggle('on', !!d.busy);
-  const n = items().filter((i) => i.status === 'new').length;
-  const b = $('#scrubNew');
-  b.replaceChildren(icon('play'), 'Scrub new' + (n ? ' (' + n + ')' : ''));
-  b.disabled = n === 0;
   const total = items().length, vis = visibleItems().length;
   $('#count').textContent = total ? '(' + (vis === total ? total : vis + ' of ' + total) + ')' : '';
 }
@@ -642,7 +633,7 @@ function paneLabel(text, name, unsafe) {
 }
 function emptyAfter(it) {
   let msg;
-  if (it.status === 'new') msg = 'Not scrubbed yet. Use "Scrub new" or re-run this item.';
+  if (it.status === 'new') msg = 'Not scrubbed yet. Press Scrub below to scrub this one.';
   else if (it.status === 'queued') msg = 'Queued. Waiting for the scrubber.';
   else if (it.status === 'running') msg = 'Scrubbing now.';
   else if (it.status === 'error') msg = 'Scrub failed. No output was written.' + ((it.error || (it.report && it.report.error)) ? '\n' + (it.error || it.report.error) : '');
@@ -839,13 +830,6 @@ function renderAll() {
 }
 
 /* ---------- actions ---------- */
-const CONFIRM_OVER = 20;
-async function scrubNew() {
-  const n = items().filter((i) => i.status === 'new').length;
-  if (n > CONFIRM_OVER && !confirm('Scrub ' + n + ' screenshots? They run one at a time and each can take a few seconds.')) return;
-  try { await api('/api/scrub', { method: 'POST' }); } catch (e) { toast(e.message); }
-  poll();
-}
 async function rerun(name) {
   try { await api('/api/scrub?name=' + enc(name), { method: 'POST' }); } catch (e) { toast(e.message); }
   poll();
@@ -913,7 +897,6 @@ document.querySelectorAll('#zooms button').forEach((b) => b.addEventListener('cl
   S.zoom = b.dataset.zoom; store.set('zoom', S.zoom); renderMain();
 }));
 $('#edits').addEventListener('change', (e) => { S.edits = e.target.checked; store.set('edits', S.edits ? '1' : '0'); renderMain(); });
-$('#scrubNew').addEventListener('click', scrubNew);
 $('#pick').replaceChildren(icon('add'), 'Add images');
 $('#pick').addEventListener('click', () => $('#file').click());
 $('#file').addEventListener('change', (e) => { const f = e.target.files; if (f && f.length) upload(f); e.target.value = ''; });
