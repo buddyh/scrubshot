@@ -190,14 +190,19 @@ final class ServeApp: @unchecked Sendable {
     // MARK: state
 
     /// Result of `lstat` (does not follow symlinks): modification time in ms, size, and whether it is a directory.
-    struct FileInfo { let mtimeMs: Int64; let size: Int64; let isDir: Bool; let isRegular: Bool }
+    struct FileInfo {
+        let mtimeMs: Int64; let size: Int64; let isDir: Bool; let isRegular: Bool
+        /// Changes on any rewrite or replacement: size, full-precision mtime and ctime, and inode.
+        let version: String
+    }
 
     static func fileInfo(_ path: String) -> FileInfo? {
         var st = stat()
         guard lstat(path, &st) == 0 else { return nil }
         let ms = Int64(st.st_mtimespec.tv_sec) * 1000 + Int64(st.st_mtimespec.tv_nsec) / 1_000_000
+        let version = "\(st.st_size)|\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)|\(st.st_ctimespec.tv_sec).\(st.st_ctimespec.tv_nsec)|\(st.st_ino)"
         return FileInfo(mtimeMs: ms, size: Int64(st.st_size), isDir: (st.st_mode & S_IFMT) == S_IFDIR,
-                        isRegular: (st.st_mode & S_IFMT) == S_IFREG)
+                        isRegular: (st.st_mode & S_IFMT) == S_IFREG, version: version)
     }
 
     /// The folder could not be listed in time, usually because macOS is waiting for the user to allow access.
@@ -387,7 +392,7 @@ final class ServeApp: @unchecked Sendable {
     /// the calling thread is not held while OCR runs.
     func audit(_ name: String, done: @escaping (Result<String, Error>) -> Void) {
         guard isPlainFile(name), let info = Self.fileInfo(path(name)) else { done(.failure(CLIError(message: "no such image"))); return }
-        let key = "\(info.size)|\(info.mtimeMs)"
+        let key = info.version
         lock.lock()
         if let hit = auditCache[name], hit.key == key { lock.unlock(); done(.success(hit.json)); return }
         auditsPending += 1

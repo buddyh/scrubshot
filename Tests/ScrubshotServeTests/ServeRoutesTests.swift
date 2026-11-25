@@ -133,6 +133,25 @@ final class ServeRoutesTests: XCTestCase {
         XCTAssertEqual(app.handle(req("/api/thumb", query: ["name": "big.png"])).status, 404)
     }
 
+    func testFileVersionChangesOnSameSizeReplacement() throws {
+        try write("a.png", in: dir, Data("AAAA".utf8))
+        let before = try XCTUnwrap(ServeApp.fileInfo(dir + "/a.png"))
+        // Same size, same mtime, written to a new file and renamed over the old one.
+        try write("tmp.png", in: dir, Data("BBBB".utf8))
+        var times = [timespec(tv_sec: 0, tv_nsec: 0), timespec(tv_sec: 0, tv_nsec: 0)]
+        times[0].tv_nsec = Int(UTIME_OMIT)
+        times[1].tv_sec = 1_700_000_000
+        XCTAssertEqual(utimensat(AT_FDCWD, dir + "/a.png", times, 0), 0)
+        XCTAssertEqual(utimensat(AT_FDCWD, dir + "/tmp.png", times, 0), 0)
+        let pinned = try XCTUnwrap(ServeApp.fileInfo(dir + "/a.png"))
+        XCTAssertEqual(rename(dir + "/tmp.png", dir + "/a.png"), 0)
+        let after = try XCTUnwrap(ServeApp.fileInfo(dir + "/a.png"))
+        XCTAssertEqual(pinned.mtimeMs, after.mtimeMs)
+        XCTAssertEqual(pinned.size, after.size)
+        XCTAssertNotEqual(pinned.version, after.version)
+        XCTAssertNotEqual(before.version, after.version)
+    }
+
     func testUploadDoesNotWriteThroughPlantedSymlink() throws {
         let target = outside + "/target.png"
         try FileManager.default.createSymbolicLink(atPath: dir + "/a.png", withDestinationPath: target)
