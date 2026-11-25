@@ -496,8 +496,8 @@ final class ServeApp: @unchecked Sendable {
                 r.headers["ETag"] = st.etag
                 return noStore(r)
             case ("GET", "/api/image"):
-                guard let name = validName(req.query["name"]) else { return fail(400, "bad name") }
-                guard isImageName(name), let data = readPlainFile(name) else { return fail(404, "no such image") }
+                guard let name = validName(req.query["name"]), isImageName(name) else { return fail(400, "bad name") }
+                guard let data = readPlainFile(name) else { return fail(404, "no such image") }
                 return noStore(.data(data, contentType: mimeType(name)))
             case ("GET", "/api/thumb"):
                 guard let name = validName(req.query["name"]), isImageName(name) else { return fail(400, "bad name") }
