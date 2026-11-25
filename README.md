@@ -2,10 +2,14 @@
 
 [![CI](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml/badge.svg)](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml)
 
-Replace sensitive text in screenshots so they're safe to post. Names of companies,
+Replace sensitive text in screenshots before you post them. Names of companies,
 clients, repos, products and people, plus emails and internal URLs, get swapped
 for fake text drawn in the same font, size, color and position. Everything else
 in the image stays exactly as it was.
+
+scrubshot is best effort. OCR can miss text, and it cannot replace what it does
+not read. Check every output by eye before you post it. See
+[SECURITY.md](SECURITY.md).
 
 ![Before and after: synthetic fixture](docs/demo.png)
 
