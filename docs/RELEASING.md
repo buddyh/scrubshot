@@ -60,10 +60,12 @@ commits with those strings rewritten, ending on the same tree as `main` here.
   git filter-repo --force \
     --replace-text ~/.config/scrubshot/release-replace.txt \
     --replace-message ~/.config/scrubshot/release-replace.txt
-  git push git@github.com:buddyh/scrubshot-release.git main
+  test "$(git rev-parse HEAD^{tree})" = "$(git -C <this repo> rev-parse main^{tree})"
+  git push --tags git@github.com:buddyh/scrubshot-release.git main
   ```
-  Check that `git rev-parse HEAD^{tree}` matches `main^{tree}` here, then scan
-  the release history (b). At launch, make `scrubshot-release` public (rename it
+  The `test` line stops the sync if the rewritten tree differs from this repo's
+  `main` (a replacement hit current files). `--tags` carries release tags
+  (rewritten with the commits). Then scan the release history (b). At launch, make `scrubshot-release` public (rename it
   if wanted) and archive this one.
 - **(b) Scan for secrets and real names.** Run gitleaks on the release
   repository's full history, and search it for real company, client, and people
