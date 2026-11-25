@@ -131,7 +131,8 @@ final class ServeApp: @unchecked Sendable {
         self.port = port
         self.rulesJSON = (try? serveEncode(ServeRules(count: rules.rules.count, sources: sources))) ?? "{}"
         self.versionJSON = (try? serveEncode(version)) ?? "\"\""
-        self.workspaceJSON = (try? serveEncode(root)) ?? "\"\""
+        // Shown in the page header; "~" keeps the user name out of screenshots of the page.
+        self.workspaceJSON = (try? serveEncode((root as NSString).abbreviatingWithTildeInPath)) ?? "\"\""
     }
 
     // MARK: names and files
