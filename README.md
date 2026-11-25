@@ -1,5 +1,7 @@
 # scrubshot
 
+[![CI](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml/badge.svg)](https://github.com/buddyh/scrubshot/actions/workflows/ci.yml)
+
 Replace sensitive text in screenshots so they're safe to post. Names of companies,
 clients, repos, products and people, plus emails and internal URLs, get swapped
 for fake text drawn in the same font, size, color and position. Everything else
@@ -185,3 +187,7 @@ make test       # unit tests plus synthetic screenshots (light, dark, tinted at 
 make fixtures   # rewrite Tests/Fixtures/*.png
 SCRUBSHOT_DEBUG=1 scrubshot shot.png   # print font-fit details per edit
 ```
+
+## License
+
+scrubshot is released under the [MIT License](LICENSE).
