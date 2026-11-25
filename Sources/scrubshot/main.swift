@@ -392,8 +392,11 @@ do {
     stderr("scrubshot: \(message)")
     // Under --json a failed run still gives a parseable answer on stdout.
     if CommandLine.arguments.contains("--json"), !["serve"].contains(CommandLine.arguments.dropFirst().first) {
-        struct Failure: Encodable { struct Body: Encodable { let code: String; let message: String }; let error: Body }
-        if let out = try? encode(Failure(error: .init(code: code, message: message))) { print(out) }
+        struct Failure: Encodable {
+            struct Body: Encodable { let code: String; let message: String }
+            let error: Body; let schemaVersion: Int; let version: String
+        }
+        if let out = try? encode(Failure(error: .init(code: code, message: message), schemaVersion: jsonSchemaVersion, version: cliVersion)) { print(out) }
     }
     exit(1)
 }
