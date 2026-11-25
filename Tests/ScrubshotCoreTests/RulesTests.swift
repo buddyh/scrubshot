@@ -139,3 +139,16 @@ final class RulesParseTests: XCTestCase {
         XCTAssertEqual(f.rules?.first?.term, "Globex")
     }
 }
+
+final class SchemaTests: XCTestCase {
+    func testSchemaIsValidJSONAndListsEveryRuleKey() throws {
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(RulesSchema.json().utf8)) as? [String: Any])
+        let props = try XCTUnwrap(obj["properties"] as? [String: Any])
+        XCTAssertEqual(Set(props.keys), ["detectors", "rules"])
+        let rules = try XCTUnwrap(props["rules"] as? [String: Any])
+        let item = try XCTUnwrap(rules["items"] as? [String: Any])
+        let keys = Set(try XCTUnwrap(item["properties"] as? [String: Any]).keys)
+        XCTAssertEqual(keys, Set(RulesFile.Spec.knownKeys))
+        XCTAssertEqual((obj["x-scrubshot"] as? [String: Any])?["jsonOutputSchemaVersion"] as? Int, jsonSchemaVersion)
+    }
+}

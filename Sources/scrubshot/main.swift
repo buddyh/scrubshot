@@ -11,6 +11,7 @@ USAGE
   scrubshot audit <image> [options]       list every text span OCR finds
   scrubshot serve [folder] [options]      local web UI for a folder of screenshots
   scrubshot rules-path                    print the default rules file path
+  scrubshot schema                        print the JSON Schema of a rules file
 
 SCRUB OPTIONS
   -o, --output <path>     output file (one input only). Never the input itself.
@@ -312,6 +313,9 @@ do {
         exit(0)
     case "--version", "version":
         print(version)
+        exit(0)
+    case "schema":
+        print(RulesSchema.json())
         exit(0)
     case "rules-path":
         print(defaultRulesPath)

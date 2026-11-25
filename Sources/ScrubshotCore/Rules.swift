@@ -30,7 +30,10 @@ public struct RulesFile: Codable {
             self.category = category; self.wholeWord = wholeWord; self.caseSensitive = caseSensitive
         }
 
-        enum CodingKeys: String, CodingKey { case term, terms, regex, replace, category, wholeWord, caseSensitive }
+        enum CodingKeys: String, CodingKey, CaseIterable { case term, terms, regex, replace, category, wholeWord, caseSensitive }
+
+        /// Every key a rule may have.
+        public static var knownKeys: [String] { CodingKeys.allCases.map(\.rawValue) }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
