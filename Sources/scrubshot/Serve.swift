@@ -309,7 +309,7 @@ final class ServeApp: @unchecked Sendable {
             let body = "{\"busy\":\(busy),\"items\":[" + frags.map(\.json).joined(separator: ",") + "],\"rules\":" + rulesJSON
                 + ",\"version\":" + versionJSON + ",\"workspace\":" + workspaceJSON + "}"
             let etag = "\"" + fnv1a(body) + "\""
-            stateMemo = (Date(), gen, body, etag)
+            lock.withLock { stateMemo = (Date(), gen, body, etag) }   // freshMemo reads it under `lock`
             return (body, etag)
         }
     }
