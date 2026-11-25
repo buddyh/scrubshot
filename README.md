@@ -161,10 +161,14 @@ an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
 
-The server bounds its own load: at most 128 open connections, 8 ordinary requests
-handled at once plus 3 more for slow ones (thumbnails, OCR), and a client that goes quiet for 10 seconds before
-finishing its request gets a 408. When the queue is full it answers 503, so a
-burst of slow requests cannot hang the page.
+The server bounds its own load:
+
+- At most 128 open connections. More than that get a 503 at once.
+- 8 ordinary requests run at once. Thumbnails (`/api/thumb`) use a separate
+  lane of 3, so slow requests cannot starve the rest.
+- Each lane queues up to 256 waiting requests. After that it answers 503.
+- A client that goes quiet for 10 seconds before finishing its request gets a
+  408.
 
 To reach it from another device, put a local reverse proxy in front and pass its
 name: `scrubshot serve ~/Screenshots --host-alias scrubshot.internal`. The server still
