@@ -44,23 +44,32 @@ repository is made public.
 
 ## Before making the repo public
 
-This repository is private. Do not change its visibility to public. Publish a
-new public repository with a fresh history instead.
+This repository is private, and its early history holds test strings that were
+later replaced with made-up names. Do not make it public. The public release
+comes from `buddyh/scrubshot-release` (private until launch), which has the same
+commits with those strings rewritten, ending on the same tree as `main` here.
 
-- **(a) Use fresh history.** Early commits in this repository contain test
-  strings that were later replaced with made-up names. Those strings remain in
-  the git history even though the current tree is clean. Make the public
-  repository from a squashed snapshot of the tree:
+- **(a) Sync the release repository.** The rewrite is deterministic, so each
+  sync is a fast-forward. The replacement list names the real strings, so it
+  lives outside the repo at `~/.config/scrubshot/release-replace.txt` (one
+  `old==>new` per line, git-filter-repo format):
   ```sh
-  git checkout --orphan public
-  git commit -m "chore: initial public release"
+  rm -rf /tmp/scrubshot-sync
+  git clone --no-local --single-branch --branch main <this repo> /tmp/scrubshot-sync
+  cd /tmp/scrubshot-sync
+  git filter-repo --force \
+    --replace-text ~/.config/scrubshot/release-replace.txt \
+    --replace-message ~/.config/scrubshot/release-replace.txt
+  git push git@github.com:buddyh/scrubshot-release.git main
   ```
-  Then push that single commit to a NEW public repository. Do not push this
-  repository's history to it.
-- **(b) Scan for secrets and real names.** Run gitleaks on the tree that will
-  be published, and search for real company, client, and people names:
+  Check that `git rev-parse HEAD^{tree}` matches `main^{tree}` here, then scan
+  the release history (b). At launch, make `scrubshot-release` public (rename it
+  if wanted) and archive this one.
+- **(b) Scan for secrets and real names.** Run gitleaks on the release
+  repository's full history, and search it for real company, client, and people
+  names:
   ```sh
-  gitleaks dir --no-banner --redact .
+  gitleaks git --no-banner --redact .
   ```
   Fix every finding. Do not allow an exception without a reason in the commit.
 - **(c) Confirm the images are synthetic.** Check every image in `docs/` and
