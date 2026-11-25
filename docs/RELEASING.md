@@ -26,13 +26,14 @@ repository is made public.
 6. **Build the universal release binary.**
    ```sh
    swift build -c release --arch arm64 --arch x86_64
+   BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/scrubshot"
    ```
-   The binary is in `.build/apple/Products/Release/scrubshot`. Check it with
+   SwiftPM picks the output folder, so take the path from `--show-bin-path`. Check it with
    `lipo -archs` (it should list `arm64 x86_64`) and run `--version`.
 7. **Package and checksum the binary.**
    ```sh
    mkdir -p artifacts/release
-   cp .build/apple/Products/Release/scrubshot artifacts/release/scrubshot-X.Y.Z-macos-universal
+   cp "$BIN" artifacts/release/scrubshot-X.Y.Z-macos-universal
    shasum -a 256 artifacts/release/scrubshot-X.Y.Z-macos-universal > artifacts/release/scrubshot-X.Y.Z-macos-universal.sha256
    ```
    The `artifacts/` folder is git-ignored, so the release files are not
