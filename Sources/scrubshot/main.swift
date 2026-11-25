@@ -9,6 +9,7 @@ scrubshot \(version) - replace sensitive text in screenshots, locally
 
 USAGE
   scrubshot <image>... [options]          scrub images, write <name>-scrubbed.png
+  scrubshot scrub <image>... [options]    same as above, with the command spelled out
   scrubshot audit <image> [options]       list every text span OCR finds
   scrubshot serve [folder] [options]      local web UI for a folder of screenshots
   scrubshot rules-path                    print the default rules file path
@@ -23,7 +24,7 @@ SCRUB OPTIONS
       --replace <a=b>     replace literal text a with b (repeatable)
       --term <text>       replace text with a stable fake value (repeatable).
                           Prefix a category to choose the kind of fake value:
-                          person:, company:, product:, repo:, acronym:, word:
+                          person:, company:, product:, repo:, acronym:, email:, url:, word:
       --emails / --no-emails   detect email addresses (default: from rules, else off)
       --urls / --no-urls       detect URLs and domains (default: from rules, else off)
       --report            write <output>.report.json (what was replaced, and where)
