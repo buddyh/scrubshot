@@ -118,6 +118,18 @@ public enum ImageFile {
 
     public static func writePNG(_ image: CGImage, dpi: (Double, Double)?, to url: URL) throws {
         let data = try pngData(image, dpi: dpi)
-        try data.write(to: url, options: .atomic)
+        let dir = url.deletingLastPathComponent().path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else {
+            throw ScrubError.imageEncode("output folder does not exist: \(dir)")
+        }
+        guard FileManager.default.isWritableFile(atPath: dir) else {
+            throw ScrubError.imageEncode("output folder is not writable: \(dir)")
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw ScrubError.imageEncode("could not save \(url.path): \((error as NSError).localizedDescription)")
+        }
     }
 }
