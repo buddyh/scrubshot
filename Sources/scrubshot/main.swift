@@ -1,7 +1,6 @@
 import Foundation
 import ScrubshotCore
 
-let version = "0.1.0"
 let cliVersion = version
 
 let usage = """
@@ -109,9 +108,6 @@ struct Config {
     var ocrScale = 1.0
     var verifyScales: [Double] = [1, 2]
 }
-
-let defaultRulesPath = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".config/scrubshot/rules.json").path
 
 func parse(_ args: Args) throws -> Config {
     var c = Config()

@@ -4,6 +4,11 @@ import ScrubshotCore
 
 // `scrubshot serve`: a local web UI over a folder of screenshots. See the contract for the API.
 
+// Globals the serve routes read live here, not in main.swift: top-level values in main.swift are only set
+// once the script runs, so a test that imports the module would see them uninitialized.
+let version = "0.1.0"
+let defaultRulesPath = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".config/scrubshot/rules.json").path
 let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "tif", "gif", "bmp"]
 let maxRequestBody = 64 * 1024 * 1024
 
