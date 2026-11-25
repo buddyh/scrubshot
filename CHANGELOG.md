@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-25
 
 ### Added
 
@@ -55,3 +55,5 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Edit analysis, font placement and the verification OCR passes run in
   parallel, about 20-30% faster per screenshot with byte-identical output.
   `SCRUBSHOT_TIMING=1` prints per-phase timings.
+
+[0.1.0]: https://github.com/buddyh/scrubshot/releases/tag/v0.1.0
