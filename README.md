@@ -143,8 +143,9 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
 ![scrubshot serve: a batch of synthetic screenshots, before and after](docs/web-ui.png)
 
 - It shows one folder. Every screenshot in it is a row with its status (new,
-  queued, running, ok, leak, error). Drop images on the page to add and scrub them.
-  "Scrub new" runs the rest.
+  queued, running, ok, leak, error). Drop images on the page to add and scrub them,
+  or press Scrub on one you're viewing. There is no button that scrubs the whole
+  folder; batch runs go through the CLI.
 - **Side by side** and **Slider** compare before and after. "Show edits" outlines
   every redrawn box, and leaks are drawn in red.
 - **OCR** draws what Vision read over the original. Hover a box for its text,
@@ -158,9 +159,8 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   so their runs show up as they finish.
 - Big folders are fine. The rail loads small cached thumbnails (`/api/thumb`),
   shows the first 100 rows and loads more as you scroll, and a filter box matches
-  name words or a status (`leak`, `new`). "Scrub new" asks first when it would
-  queue more than 20 screenshots. The page asks for state with an ETag, so a poll
-  that changes nothing costs almost nothing.
+  name words or a status (`leak`, `new`). The page asks for state with an ETag, so
+  a poll that changes nothing costs almost nothing.
 - If macOS is holding back access to the folder (Desktop, Documents and Downloads
   ask first), the page shows a "waiting for access" banner instead of hanging.
   Allow access in the prompt and it recovers by itself.
