@@ -491,7 +491,10 @@ function showMore() {
 }
 $('#list').addEventListener('scroll', (e) => {
   const l = e.currentTarget;
-  const nearEnd = l.scrollHeight - l.scrollTop - l.clientHeight < 300 || l.scrollWidth - l.scrollLeft - l.clientWidth < 300;
+  // The rail scrolls down on wide screens and sideways in the narrow layout; only an axis that overflows counts.
+  const down = l.scrollHeight > l.clientHeight && l.scrollHeight - l.scrollTop - l.clientHeight < 300;
+  const side = l.scrollWidth > l.clientWidth && l.scrollWidth - l.scrollLeft - l.clientWidth < 300;
+  const nearEnd = down || side;
   if (nearEnd && visibleItems().length > S.limit) showMore();
 }, { passive: true });
 $('#filter').addEventListener('input', (e) => {
