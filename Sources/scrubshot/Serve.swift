@@ -418,7 +418,7 @@ final class ServeApp: @unchecked Sendable {
         let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
         for n in 1...10_000 {
             let candidate = n == 1 ? name : "\(stem)-\(n).\(ext)"
-            let fd = open(path(candidate), O_WRONLY | O_CREAT | O_EXCL, 0o644)
+            let fd = open(path(candidate), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
             if fd < 0 {
                 if errno == EEXIST { continue }
                 throw CLIError(message: "cannot save \(candidate): \(String(cString: strerror(errno)))")
