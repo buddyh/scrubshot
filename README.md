@@ -33,10 +33,15 @@ Requires macOS 14+ and Swift 6 (Xcode or Command Line Tools).
 ## Install
 
 ```sh
-git clone git@github.com:buddyh/scrubshot.git && cd scrubshot
+git clone https://github.com/buddyh/scrubshot.git && cd scrubshot
 make install          # swift build -c release, then copy to ~/.local/bin/scrubshot
 make install-skill    # optional: link the agent skill into ~/.claude/skills/scrubshot
 ```
+
+`make install` puts the binary in `~/.local/bin`. Use `make install PREFIX=/usr/local`
+to pick another prefix (the binary goes in `$PREFIX/bin`). If `scrubshot` is not
+found, add the folder to your PATH, for example
+`export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc`.
 
 The first run after a reboot can take a while (about 30s) while Vision loads its
 models. After that a screenshot takes under a second.
