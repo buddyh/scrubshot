@@ -12,6 +12,7 @@ let package = Package(
         .target(name: "ScrubshotCore"),
         .executableTarget(name: "scrubshot", dependencies: ["ScrubshotCore"]),
         .testTarget(name: "ScrubshotCoreTests", dependencies: ["ScrubshotCore"]),
+        .testTarget(name: "ScrubshotServeTests", dependencies: ["scrubshot", "ScrubshotCore"]),
     ],
     swiftLanguageModes: [.v5]
 )
