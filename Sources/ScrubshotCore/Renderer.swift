@@ -164,7 +164,7 @@ public enum Renderer {
 
     /// Everything measured about one edit before anything is drawn.
     public struct Analysis {
-        public let request: EditRequest
+        public var request: EditRequest
         let bg: Pixel
         let flatness: Double
         public let ink: PixelRect

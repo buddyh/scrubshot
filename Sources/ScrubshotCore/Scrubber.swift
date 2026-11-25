@@ -24,6 +24,8 @@ public struct ReplacementRecord: Codable {
     public var line: String
     public var render: EditResult?
     public var skipped: String?
+    /// For rules with a candidate list: every candidate, its width delta, and which one was used.
+    public var candidates: [CandidateOption]? = nil
 }
 
 public struct Leak: Codable, Equatable {
@@ -50,6 +52,16 @@ struct PlannedEdit {
     var newText: String
     var matches: [RuleMatch]
     var line: String
+    /// Text kept between replacements, and the replacements themselves (empty for the
+    /// continuation of a match across observations). `newText` is `segments` joined with `reps`.
+    var segments: [String] = []
+    var reps: [(match: RuleMatch, text: String)] = []
+
+    mutating func recompose() {
+        var out = segments[0]
+        for (i, r) in reps.enumerated() { out += r.text + segments[i + 1] }
+        newText = out
+    }
 }
 
 /// Opt-in per-phase timing: SCRUBSHOT_TIMING=1 prints milliseconds to stderr.
@@ -72,14 +84,14 @@ public enum Scrubber {
         let bmp = try Bitmap(image: image)
         let pieces = try Timing.measure("ocr") { try OCR.recognize(image, scale: options.ocrScale) }
         let lines = OCR.lines(pieces)
-        let plan = planEdits(lines: lines, rules: options.rules)
+        var plan = planEdits(lines: lines, rules: options.rules)
 
         // Measure every edit on the untouched image, agree on fonts, then draw.
         let requests = plan.map { e in
             EditRequest(box: e.piece.box(for: e.range), originalText: (e.piece.text as NSString).substring(with: e.range),
                         keepPrefix: e.keepPrefix, newText: e.newText)
         }
-        let analyses = Timing.measure("analyze") {
+        var analyses = Timing.measure("analyze") {
             var slots = [Renderer.Analysis?](repeating: nil, count: requests.count)
             slots.withUnsafeMutableBufferPointer { buf in
                 guard let base = buf.baseAddress else { return }
@@ -90,6 +102,7 @@ public enum Scrubber {
             return slots
         }
         let choices = Timing.measure("consensus") { consensus(analyses) }
+        let candidateReports = resolveCandidates(plan: &plan, analyses: &analyses, choices: choices)
         if ProcessInfo.processInfo.environment["SCRUBSHOT_DEBUG"] != nil {
             for (i, a) in analyses.enumerated() {
                 guard let a else { continue }
@@ -121,7 +134,8 @@ public enum Scrubber {
                 records.append(ReplacementRecord(
                     original: m.original, replacement: m.replacement, rule: m.rule,
                     redrawnFrom: from, redrawnTo: to, line: e.line, render: result,
-                    skipped: result == nil ? "no text pixels found in the OCR box" : nil))
+                    skipped: result == nil ? "no text pixels found in the OCR box" : nil,
+                    candidates: candidateReports[m.rule]))
             }
             if let r = result {
                 redrawn.append(r.fill)
@@ -218,16 +232,20 @@ public enum Scrubber {
                     }
                 }
                 for (range, its) in groups {
-                    var newText = ""
+                    var segments: [String] = []
+                    var reps: [(match: RuleMatch, text: String)] = []
                     var cursor = its[0].0.location
-                    for (r, rep, _) in its {
-                        newText += ns.substring(with: NSRange(location: cursor, length: r.location - cursor))
-                        newText += rep
+                    for (r, rep, m) in its {
+                        segments.append(ns.substring(with: NSRange(location: cursor, length: r.location - cursor)))
+                        reps.append((m, rep))
                         cursor = NSMaxRange(r)
                     }
-                    newText += ns.substring(with: NSRange(location: cursor, length: NSMaxRange(range) - cursor))
-                    edits.append(PlannedEdit(piece: piece, range: range, keepPrefix: its[0].0.location - range.location,
-                                             newText: newText, matches: its.map(\.2), line: line.text))
+                    segments.append(ns.substring(with: NSRange(location: cursor, length: NSMaxRange(range) - cursor)))
+                    var edit = PlannedEdit(piece: piece, range: range, keepPrefix: its[0].0.location - range.location,
+                                           newText: "", matches: its.map(\.2), line: line.text,
+                                           segments: segments, reps: reps)
+                    edit.recompose()
+                    edits.append(edit)
                 }
             }
         }

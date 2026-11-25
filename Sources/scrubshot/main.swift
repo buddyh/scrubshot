@@ -2,6 +2,7 @@ import Foundation
 import ScrubshotCore
 
 let version = "0.1.0"
+let cliVersion = version
 
 let usage = """
 scrubshot \(version) - replace sensitive text in screenshots, locally
@@ -11,10 +12,13 @@ USAGE
   scrubshot audit <image> [options]       list every text span OCR finds
   scrubshot serve [folder] [options]      local web UI for a folder of screenshots
   scrubshot rules-path                    print the default rules file path
+  scrubshot schema                        print the JSON Schema of a rules file
 
 SCRUB OPTIONS
   -o, --output <path>     output file (one input only). Never the input itself.
-  -r, --rules <file>      rules JSON (repeatable). Default: ~/.config/scrubshot/rules.json
+  -r, --rules <file>      rules JSON (repeatable). Use - to read it from stdin.
+                          Default: ~/.config/scrubshot/rules.json
+      --rules-json <json> rules JSON given inline (repeatable)
       --no-default-rules  skip the default rules file
       --replace <a=b>     replace literal text a with b (repeatable)
       --term <text>       replace text with a stable fake value (repeatable).
@@ -45,6 +49,36 @@ EXIT CODES
 """
 
 struct CLIError: Error { let message: String }
+/// A file could not be found, read or written.
+struct IOFailure: Error { let message: String }
+
+/// Stable machine-readable error codes: usage, rules, image_decode, image_encode, ocr, io, leak.
+func classify(_ e: Error) -> (code: String, message: String) {
+    switch e {
+    case let e as CLIError: return ("usage", e.message)
+    case let e as IOFailure: return ("io", e.message)
+    case let e as ScrubError:
+        let code: String
+        switch e {
+        case .usage: code = "usage"
+        case .rules: code = "rules"
+        case .imageDecode: code = "image_decode"
+        case .imageEncode: code = "image_encode"
+        case .ocr: code = "ocr"
+        }
+        return (code, e.description)
+    case is CocoaError, is POSIXError: return ("io", (e as NSError).localizedDescription)
+    default: return ("io", "\(e)")
+    }
+}
+
+func requireReadable(_ path: String) throws {
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+        throw IOFailure(message: "no such file: \(path)")
+    }
+    guard FileManager.default.isReadableFile(atPath: path) else { throw IOFailure(message: "cannot read \(path)") }
+}
 
 final class Args {
     var items: [String]
@@ -61,6 +95,7 @@ struct Config {
     var inputs: [String] = []
     var output: String?
     var rulesFiles: [String] = []
+    var inlineRules: [String] = []
     var defaultRules = true
     var replaces: [(String, String)] = []
     var terms: [(String, ScrubshotCore.Category)] = []
@@ -83,6 +118,7 @@ func parse(_ args: Args) throws -> Config {
         switch a {
         case "-o", "--output": c.output = try args.value(a)
         case "-r", "--rules": c.rulesFiles.append(try args.value(a))
+        case "--rules-json": c.inlineRules.append(try args.value(a))
         case "--no-default-rules": c.defaultRules = false
         case "--replace":
             let v = try args.value(a)
@@ -127,7 +163,19 @@ func buildRules(_ c: Config) throws -> RuleSet {
     var files: [RulesFile] = []
     var paths = c.rulesFiles
     if c.defaultRules && FileManager.default.fileExists(atPath: defaultRulesPath) { paths.insert(defaultRulesPath, at: 0) }
-    for p in paths { files.append(try RulesFile.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))) }
+    var stdinUsed = false
+    for p in paths {
+        if p == "-" {
+            guard !stdinUsed else { throw CLIError(message: "-r - can only be used once") }
+            stdinUsed = true
+            files.append(try RulesFile.parse(FileHandle.standardInput.readDataToEndOfFile(), source: "<stdin>"))
+        } else {
+            files.append(try RulesFile.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath)))
+        }
+    }
+    for (i, json) in c.inlineRules.enumerated() {
+        files.append(try RulesFile.parse(Data(json.utf8), source: "--rules-json #\(i + 1)"))
+    }
     var extra: [Rule] = []
     for (i, (a, b)) in c.replaces.enumerated() {
         extra.append(try RuleSet.rule(from: .init(term: a, replace: b), id: "replace\(i + 1)"))
@@ -148,10 +196,22 @@ func stderr(_ s: String) { FileHandle.standardError.write((s + "\n").data(using:
 
 // MARK: audit
 
-struct AuditSpan: Codable { let text: String; let box: PixelRect; let confidence: Double }
-struct AuditMatch: Codable { let text: String; let replacement: String; let rule: String }
+struct AuditSpan: Codable {
+    let text: String; let box: PixelRect; let confidence: Double
+    /// Height of the span's text line in pixels, and the font size that line most likely
+    /// has. Use them to judge how wide a replacement can be.
+    let lineHeight: Int; let estFontSize: Double
+}
+struct AuditMatch: Codable {
+    let text: String; let replacement: String; let rule: String
+    let category: String?; let candidates: [String]?
+}
 struct AuditLine: Codable { let text: String; let box: PixelRect; let spans: [AuditSpan]; let matches: [AuditMatch] }
-struct AuditResult: Codable { let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
+struct AuditResult: Codable { let schemaVersion: Int; let version: String; let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
+
+/// Vision's text box is a little taller than the font size; this ratio comes from system-font
+/// screenshots and is an estimate, good to about a point.
+func estimateFontSize(lineHeight: Double) -> Double { (lineHeight / 1.2 * 2).rounded() / 2 }
 
 /// OCR one image and mark the spans the rules match.
 func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
@@ -160,15 +220,21 @@ func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> Audi
     let out = lines.map { l in
         AuditLine(text: l.text, box: PixelRect(l.box),
                   spans: l.parts.map { AuditSpan(text: $0.piece.text, box: PixelRect($0.piece.box),
-                                                 confidence: (Double($0.piece.confidence) * 100).rounded() / 100) },
-                  matches: rules.matches(in: l.text).map { AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule) })
+                                                 confidence: (Double($0.piece.confidence) * 100).rounded() / 100,
+                                                 lineHeight: PixelRect($0.piece.box).height,
+                                                 estFontSize: estimateFontSize(lineHeight: $0.piece.box.height)) },
+                  matches: rules.matches(in: l.text).map {
+                      AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule,
+                                 category: $0.category, candidates: $0.candidates)
+                  })
     }
-    return AuditResult(image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
+    return AuditResult(schemaVersion: jsonSchemaVersion, version: cliVersion, image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
 }
 
 func audit(_ c: Config) throws -> Int32 {
     guard c.inputs.count == 1 else { throw CLIError(message: "audit takes exactly one image") }
     let path = c.inputs[0]
+    try requireReadable(path)
     let result = try auditImage(path, rules: try buildRules(c), ocrScale: c.ocrScale)
     let out = result.lines
     if c.json {
@@ -187,6 +253,8 @@ func audit(_ c: Config) throws -> Int32 {
 // MARK: scrub
 
 struct FileResult: Codable {
+    var schemaVersion: Int? = jsonSchemaVersion
+    var version: String? = cliVersion
     let input: String
     var output: String?
     var report: String?
@@ -195,6 +263,8 @@ struct FileResult: Codable {
     var leaks: [Leak]
     var warnings: [String]
     var error: String?
+    /// Stable code for `error` (usage, rules, image_decode, image_encode, ocr, io) or "leak".
+    var errorCode: String?
 }
 
 func outputPath(for input: String, explicit: String?, suffix: String = "-scrubbed") -> String {
@@ -218,6 +288,7 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
     do {
         let out = outputPath(for: input, explicit: c.output)
         if samePath(out, input) { throw CLIError(message: "refusing to overwrite the input \(input)") }
+        try requireReadable(input)
         let loaded = try ImageFile.load(URL(fileURLWithPath: input))
         let result = try Scrubber.scrub(loaded.image, options: ScrubOptions(
             rules: rules, ocrScale: c.ocrScale, verifyScales: c.verifyScales))
@@ -233,6 +304,7 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
             }
         } else {
             r.status = "leak"
+            r.errorCode = "leak"
             if c.keepFailed && !c.dryRun {
                 let unsafe = outputPath(for: input, explicit: nil, suffix: "-scrubbed-UNSAFE")
                 if !samePath(unsafe, input) {
@@ -247,10 +319,10 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
             r.report = rp
             try encode(r).write(toFile: rp, atomically: true, encoding: .utf8)
         }
-    } catch let e as CLIError {
-        r.error = e.message
     } catch {
-        r.error = "\(error)"
+        let (code, message) = classify(error)
+        r.error = message
+        r.errorCode = code
     }
     return r
 }
@@ -297,6 +369,9 @@ do {
     case "--version", "version":
         print(version)
         exit(0)
+    case "schema":
+        print(RulesSchema.json())
+        exit(0)
     case "rules-path":
         print(defaultRulesPath)
         exit(0)
@@ -312,10 +387,16 @@ do {
     default:
         exit(try scrub(try parse(args)))
     }
-} catch let e as CLIError {
-    stderr("scrubshot: \(e.message)")
-    exit(1)
 } catch {
-    stderr("scrubshot: \(error)")
+    let (code, message) = classify(error)
+    stderr("scrubshot: \(message)")
+    // Under --json a failed run still gives a parseable answer on stdout.
+    if CommandLine.arguments.contains("--json"), !["serve"].contains(CommandLine.arguments.dropFirst().first) {
+        struct Failure: Encodable {
+            struct Body: Encodable { let code: String; let message: String }
+            let error: Body; let schemaVersion: Int; let version: String
+        }
+        if let out = try? encode(Failure(error: .init(code: code, message: message), schemaVersion: jsonSchemaVersion, version: cliVersion)) { print(out) }
+    }
     exit(1)
 }

@@ -99,13 +99,22 @@ scrubshot is built to be driven by a coding agent that picks fitting replacement
 text: real-sounding names, PR titles that still read like PR titles, and
 consistent names across a series. The loop:
 
-1. `scrubshot audit shot.png --json` to read every line and span with pixel boxes.
-2. The agent writes a rules file with its chosen replacements.
-3. `scrubshot shot.png -r rules.json --dry-run --json` returns, per replacement,
+1. `scrubshot audit shot.png --json` to read every line and span with pixel boxes,
+   line heights and estimated font sizes.
+2. The agent writes rules with its chosen replacements and pipes them in with
+   `-r -` (or `--rules-json '...'`). A replacement can be a list of candidates,
+   `"replace": ["Relay", "Beacon", "Signal"]`, and scrubshot keeps the one whose
+   drawn width fits best. `scrubshot schema` prints the rules JSON Schema, and
+   mistakes fail with the key or regex column named.
+3. `scrubshot shot.png -r - --dry-run --json < rules.json` returns, per replacement,
    `render.widthDelta` (px wider (+) or narrower (−) than the original),
-   `render.scale` (below 1 means it was shrunk to fit) and warnings. The agent
-   tunes any that are far off.
+   `render.scale` (below 1 means it was shrunk to fit), the candidates tried,
+   and warnings. The agent tunes any that are far off.
 4. Run without `--dry-run`. Exit 2 lists `leaks` to fix.
+
+JSON output carries `schemaVersion` and `version`. Under `--json`, failures are
+JSON too, with stable codes: usage, rules, image_decode, image_encode, ocr, io,
+leak.
 
 [skill/scrubshot/SKILL.md](skill/scrubshot/SKILL.md) is a ready-made Claude Code
 skill for this loop (`make install-skill`). The tool stays local, but text the
