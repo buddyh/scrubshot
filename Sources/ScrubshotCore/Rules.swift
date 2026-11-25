@@ -81,6 +81,7 @@ public struct RulesFile: Codable {
     /// Parses rules JSON. `source` names where it came from in error messages
     /// (a path, `<stdin>` or `--rules-json`).
     public static func parse(_ data: Data, source: String) throws -> RulesFile {
+        try RulesValidation.check(data, source: source)
         do { return try JSONDecoder().decode(RulesFile.self, from: data) } catch {
             throw ScrubError.rules("\(source) is not valid rules JSON: \(error)")
         }
@@ -263,7 +264,8 @@ public struct RuleSet {
             do {
                 regex = try NSRegularExpression(pattern: re, options: cs ? [] : [.caseInsensitive])
             } catch {
-                throw ScrubError.rules("\(id): bad regex \(re)")
+                let why = RulesValidation.diagnose(re).map { ": \($0)" } ?? ""
+                throw ScrubError.rules("\(id): bad regex \"\(re)\"\(why)")
             }
             return try Rule(id: id, kind: .regex(regex), replacement: replacement, caseSensitive: cs)
         }
