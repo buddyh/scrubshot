@@ -411,4 +411,11 @@ final class RobustnessTests: XCTestCase {
         let a = try roundTrip(url), b = try roundTrip(url)
         XCTAssertEqual(try Data(contentsOf: a.out), try Data(contentsOf: b.out))
     }
+
+    func testPixelCountCheckDoesNotOverflow() {
+        XCTAssertTrue(ImageFile.pixelCountAllowed(1, 1))
+        XCTAssertFalse(ImageFile.pixelCountAllowed(0, 10))
+        XCTAssertFalse(ImageFile.pixelCountAllowed(Int.max, 2))
+        XCTAssertFalse(ImageFile.pixelCountAllowed(20_000, 20_000))
+    }
 }
