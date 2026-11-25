@@ -123,6 +123,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
         public var maxQueued = 256
         /// Seconds a client may stay silent before the request is complete.
         public var readTimeout: TimeInterval = 10
+        /// Seconds a response may take to send before the connection is dropped (a client that stops reading).
+        public var writeTimeout: TimeInterval = 30
         public init() {}
     }
 
@@ -314,7 +316,9 @@ public final class LocalHTTPServer: @unchecked Sendable {
     private func send(_ c: Conn, _ response: HTTPResponse) {
         guard markClosed(c) else { return }
         c.timer?.cancel()
+        let stalled = DispatchWorkItem { [self] in c.nw.cancel(); release(c) }
+        queue.asyncAfter(deadline: .now() + limits.writeTimeout, execute: stalled)
         c.nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
-                  completion: .contentProcessed { [self] _ in c.nw.cancel(); release(c) })
+                  completion: .contentProcessed { [self] _ in stalled.cancel(); c.nw.cancel(); release(c) })
     }
 }
