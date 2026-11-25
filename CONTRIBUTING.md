@@ -6,7 +6,7 @@ pull request.
 ## Requirements
 
 - macOS 14 or later
-- Swift 6 (Xcode or the Command Line Tools)
+- A Swift 6 toolchain (Xcode 16+ or matching Command Line Tools)
 
 ## Build and test
 

@@ -28,7 +28,8 @@ not read. Check every output by eye before you post it. See
   or `-o path`. Metadata is stripped. The PNG keeps only image-format data (palette,
   transparency, color profile, gamma, DPI). Text, EXIF and other chunks are dropped.
 
-Requires macOS 14+ and Swift 6 (Xcode or Command Line Tools).
+Requires macOS 14+ and a Swift 6 toolchain (Xcode 16+ or matching Command Line
+Tools).
 
 ## Install
 
