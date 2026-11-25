@@ -146,8 +146,8 @@ an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
 
-The server bounds its own load: at most 128 open connections, 8 requests handled
-at once (3 for thumbnails), and a client that goes quiet for 10 seconds before
+The server bounds its own load: at most 128 open connections, 8 ordinary requests
+handled at once plus 3 more for slow ones (thumbnails, OCR), and a client that goes quiet for 10 seconds before
 finishing its request gets a 408. When the queue is full it answers 503, so a
 burst of slow requests cannot hang the page.
 
