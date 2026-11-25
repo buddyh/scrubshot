@@ -35,3 +35,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   extra Host header for a local reverse proxy.
 - Agent skill (`skill/scrubshot`) and `make install-skill` to link it into
   Claude Code.
+- Candidate lists: `"replace": ["Relay", "Beacon"]` picks the candidate whose
+  drawn width fits best, once per rule, and reports each candidate's width.
+- Rules on stdin (`-r -`) or inline (`--rules-json`), `scrubshot schema` for the
+  rules JSON Schema, and strict validation that names the bad key or regex column.
+- `--json` output carries `schemaVersion` and `version`; failures are JSON too,
+  with stable error codes (usage, rules, image_decode, image_encode, ocr, io, leak).
+- `audit --json` adds line height, an estimated font size, and match categories.
+- Input handling: EXIF orientation is applied; multi-frame and over-100 MP
+  images are refused; missing, empty, unreadable or undecodable files and
+  unwritable output folders give clear errors.
+- `serve` scales to large folders: cached thumbnails, cached state with ETags,
+  bounded connections and handlers, a read timeout, a 503 with a banner while
+  macOS privacy access to the folder is pending, and a paged, filterable rail.
+
+### Performance
+
+- Edit analysis, font placement and the verification OCR passes run in
+  parallel, about 20-30% faster per screenshot with byte-identical output.
+  `SCRUBSHOT_TIMING=1` prints per-phase timings.
