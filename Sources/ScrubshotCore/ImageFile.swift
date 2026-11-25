@@ -16,6 +16,13 @@ public enum ImageFile {
     /// the pipeline keeps a few copies, so 100 MP is roughly 1.5 GB of memory.
     public static let maxPixels = 100_000_000
 
+    /// True when width x height is positive and within `maxPixels`, without overflowing.
+    public static func pixelCountAllowed(_ w: Int, _ h: Int) -> Bool {
+        guard w > 0, h > 0 else { return false }
+        let (n, overflow) = w.multipliedReportingOverflow(by: h)
+        return !overflow && n <= maxPixels
+    }
+
     /// Reads the first (and only) frame. EXIF orientation is applied to the pixels, so
     /// the output, which carries no EXIF, looks the same as the input did.
     /// Multi-frame files (animated GIF, multi-page TIFF) are refused, not truncated.
@@ -45,13 +52,13 @@ public enum ImageFile {
         }
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
         if let w = props?[kCGImagePropertyPixelWidth] as? Int, let h = props?[kCGImagePropertyPixelHeight] as? Int,
-           w > 0, h > 0, w.multipliedReportingOverflow(by: h).overflow || w * h > maxPixels {
+           w > 0, h > 0, !pixelCountAllowed(w, h) {
             throw ScrubError.imageDecode("\(path) is \(w)x\(h), over the \(maxPixels / 1_000_000) megapixels limit")
         }
         guard let decoded = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
             throw ScrubError.imageDecode("\(path) could not be decoded (damaged or unsupported)")
         }
-        if decoded.width * decoded.height > maxPixels {
+        if !pixelCountAllowed(decoded.width, decoded.height) {
             throw ScrubError.imageDecode("\(path) is \(decoded.width)x\(decoded.height), over the \(maxPixels / 1_000_000) megapixels limit")
         }
         var dpi: (Double, Double)?
