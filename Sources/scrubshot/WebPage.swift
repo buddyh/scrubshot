@@ -884,6 +884,9 @@ async function poll() {
     S.etag = api.etag || null;
     S.data = d;
     if (!current()) S.sel = d.items && d.items.length ? d.items[0].name : null;
+    // A selection made before its row existed (an upload) may sit past the loaded page.
+    const at = visibleItems().findIndex((x) => x.name === S.sel);
+    if (at >= S.limit) S.limit = at + PAGE;
     renderAll();
   } catch (e) {
     if (e.status === 503) {
