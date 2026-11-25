@@ -103,6 +103,9 @@ svg.i { width: 14px; height: 14px; flex: none; }
 .rail { min-height: 0; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
 .rail-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .rail-head h2 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.rail-filter { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.rail-filter input { width: 100%; font: inherit; color: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+.rail-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rail-list { flex: 1; min-height: 0; overflow: auto; }
 .rail-foot { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .rail-empty { padding: 18px 12px; color: var(--muted); line-height: 1.5; }
@@ -251,6 +254,7 @@ tr.skipped td { color: var(--muted); }
       <button id="pick" type="button"></button>
       <input id="file" type="file" accept="image/*,.heic,.tif,.tiff" multiple hidden>
     </div>
+    <div class="rail-filter"><input id="filter" type="search" placeholder="Filter by name or status" aria-label="Filter images" autocomplete="off"></div>
     <div class="rail-list" id="list"></div>
     <div class="rail-foot">j / k or arrow keys to move. Drop images anywhere to add.</div>
   </aside>
@@ -326,6 +330,7 @@ const S = {
   zoom: store.get('zoom', 'fit'),
   edits: store.get('edits', '1') === '1',
   slider: 50,
+  filter: '',
   audits: new Map(),
   online: true
 };
@@ -363,6 +368,15 @@ function toast(msg) {
 const imgUrl = (name, v) => '/api/image?name=' + enc(name) + '&v=' + enc(v == null ? '' : v);
 const thumbUrl = (name, v) => '/api/thumb?name=' + enc(name) + '&w=160&v=' + enc(v == null ? '' : v);
 const items = () => (S.data && S.data.items) || [];
+// Items the filter box lets through: every word must match the name or the status.
+function visibleItems() {
+  const words = S.filter.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return items();
+  return items().filter((i) => {
+    const name = i.name.toLowerCase();
+    return words.every((w) => name.includes(w) || i.status.startsWith(w));
+  });
+}
 const current = () => items().find((i) => i.name === S.sel) || null;
 const pct = (v, total) => (total ? (v / total * 100) : 0) + '%';
 function boxStyle(b, W, H) {
@@ -407,7 +421,8 @@ function renderHeader() {
   const b = $('#scrubNew');
   b.replaceChildren(icon('play'), 'Scrub new' + (n ? ' (' + n + ')' : ''));
   b.disabled = n === 0;
-  $('#count').textContent = items().length ? '(' + items().length + ')' : '';
+  const total = items().length, vis = visibleItems().length;
+  $('#count').textContent = total ? '(' + (vis === total ? total : vis + ' of ' + total) + ')' : '';
 }
 
 /* ---------- rail ---------- */
@@ -423,10 +438,12 @@ function makeRow(name) {
 }
 function renderRail() {
   const list = $('#list');
-  const its = items();
+  const its = visibleItems();
   if (!its.length) {
     rows.clear();
-    list.replaceChildren(h('div', { class: 'rail-empty' }, 'No images yet. Drop screenshots anywhere on this page, or add them to the workspace folder.'));
+    list.replaceChildren(h('div', { class: 'rail-empty' }, items().length
+      ? 'No images match "' + S.filter + '".'
+      : 'No images yet. Drop screenshots anywhere on this page, or add them to the workspace folder.'));
     return;
   }
   if (list.firstChild && list.firstChild.classList.contains('rail-empty')) list.replaceChildren();
@@ -460,6 +477,13 @@ function renderRail() {
   if (cur.length !== ordered.length || cur.some((e, i) => e !== ordered[i])) list.replaceChildren(...ordered);
 }
 
+$('#filter').addEventListener('input', (e) => {
+  S.filter = e.target.value;
+  $('#list').scrollTop = 0;
+  renderHeader();
+  renderRail();
+});
+
 function select(name) {
   if (S.sel === name) return;
   S.sel = name;
@@ -469,7 +493,7 @@ function select(name) {
   if (r) r.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 function move(d) {
-  const its = items();
+  const its = visibleItems();
   if (!its.length) return;
   let i = its.findIndex((x) => x.name === S.sel);
   i = Math.max(0, Math.min(its.length - 1, (i < 0 ? 0 : i + d)));
