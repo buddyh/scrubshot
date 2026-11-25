@@ -82,7 +82,7 @@ public enum Scrubber {
         let analyses = Timing.measure("analyze") {
             var slots = [Renderer.Analysis?](repeating: nil, count: requests.count)
             slots.withUnsafeMutableBufferPointer { buf in
-                let base = buf.baseAddress!
+                guard let base = buf.baseAddress else { return }
                 DispatchQueue.concurrentPerform(iterations: requests.count) { i in
                     (base + i).pointee = Renderer.analyze(requests[i], in: bmp)
                 }
@@ -102,7 +102,7 @@ public enum Scrubber {
         // Placement only reads the analysis, so it runs concurrently; drawing stays in order.
         var placed = [Renderer.Fit?](repeating: nil, count: plan.count)
         placed.withUnsafeMutableBufferPointer { buf in
-            let base = buf.baseAddress!
+            guard let base = buf.baseAddress else { return }
             DispatchQueue.concurrentPerform(iterations: plan.count) { i in
                 if let a = analyses[i], let c = choices[i] { (base + i).pointee = Renderer.place(a, fontName: c.0, size: c.1) }
             }
@@ -256,7 +256,7 @@ public enum Scrubber {
         // Scales are independent; run them together and join in scale order.
         var perScale = [Result<[Leak], Error>?](repeating: nil, count: scales.count)
         perScale.withUnsafeMutableBufferPointer { buf in
-            let base = buf.baseAddress!
+            guard let base = buf.baseAddress else { return }
             DispatchQueue.concurrentPerform(iterations: scales.count) { i in
                 (base + i).pointee = Result {
                     try verifyScale(image, scale: scales[i], rules: rules, fuzzyTerms: fuzzyTerms, redrawn: redrawn)
