@@ -43,6 +43,9 @@ public final class Bitmap {
         } else {
             space = CGColorSpace(name: CGColorSpace.sRGB)!
         }
+        guard image.width > 0, image.height > 0, image.width * image.height <= ImageFile.maxPixels else {
+            throw ScrubError.imageDecode("image is \(image.width)x\(image.height), over the \(ImageFile.maxPixels / 1_000_000) megapixels limit")
+        }
         self.init(width: image.width, height: image.height, colorSpace: space)
         let ok = data.withUnsafeMutableBytes { buf -> Bool in
             guard let ctx = CGContext(

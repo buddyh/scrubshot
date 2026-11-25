@@ -12,6 +12,12 @@ public enum ImageFile {
         public let dpi: (Double, Double)?
     }
 
+    /// Largest image we accept, in pixels. The working buffer is 4 bytes per pixel and
+    /// the pipeline keeps a few copies, so 100 MP is roughly 1.5 GB of memory.
+    public static let maxPixels = 100_000_000
+
+    /// Reads the first (and only) frame.
+    /// Multi-frame files (animated GIF, multi-page TIFF) are refused, not truncated.
     public static func load(_ url: URL) throws -> Loaded {
         let path = url.path
         var isDir: ObjCBool = false
@@ -32,9 +38,20 @@ public enum ImageFile {
               CGImageSourceGetCount(src) >= 1 else {
             throw ScrubError.imageDecode("\(path) has no readable image")
         }
+        let frames = CGImageSourceGetCount(src)
+        if frames > 1 {
+            throw ScrubError.imageDecode("\(path) has \(frames) frames (animated or multi-page); only single-image files are supported")
+        }
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        if let w = props?[kCGImagePropertyPixelWidth] as? Int, let h = props?[kCGImagePropertyPixelHeight] as? Int,
+           w > 0, h > 0, w.multipliedReportingOverflow(by: h).overflow || w * h > maxPixels {
+            throw ScrubError.imageDecode("\(path) is \(w)x\(h), over the \(maxPixels / 1_000_000) megapixels limit")
+        }
         guard let decoded = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
             throw ScrubError.imageDecode("\(path) could not be decoded (damaged or unsupported)")
+        }
+        if decoded.width * decoded.height > maxPixels {
+            throw ScrubError.imageDecode("\(path) is \(decoded.width)x\(decoded.height), over the \(maxPixels / 1_000_000) megapixels limit")
         }
         var dpi: (Double, Double)?
         if let dx = props?[kCGImagePropertyDPIWidth] as? Double, let dy = props?[kCGImagePropertyDPIHeight] as? Double {
