@@ -113,7 +113,7 @@ consistent names across a series. The loop:
    mistakes fail with the key or regex column named.
 3. `scrubshot shot.png -r - --dry-run --json < rules.json` returns, per replacement,
    `render.widthDelta` (px wider (+) or narrower (−) than the original),
-   `render.scale` (below 1 means it was shrunk to fit), the candidates tried,
+   `render.scale` (below 1 means it was shrunk to fit; below 0.9 adds a warning), the candidates tried,
    and warnings. The agent tunes any that are far off.
 4. Run without `--dry-run`. Exit 2 lists `leaks` to fix.
 

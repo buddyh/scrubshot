@@ -58,7 +58,7 @@ and do not copy it into files inside repos.
 3. **Dry run, check fit.**
    `scrubshot <img> -r - --no-default-rules --dry-run --json < rules.json`
    For each replacement, look at `render.widthDelta` (px; aim for within a few
-   pixels of 0), `render.scale` (below 0.9 means it was shrunk) and `warnings`.
+   pixels of 0), `render.scale` (below 1 means it was shrunk; below 0.9 adds a warning) and `warnings`.
    Adjust replacements that are far off and repeat.
 
 4. **Write it.**
