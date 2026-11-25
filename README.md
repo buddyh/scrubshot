@@ -25,7 +25,8 @@ not read. Check every output by eye before you post it. See
   and refuses to write it if any rule still matches, or if a redrawn area still
   reads as something one edit away from a replaced term. Exit code 2, no output.
 - **Never touches the input.** Output goes to `<name>-scrubbed.png` next to it,
-  or `-o path`. Metadata is stripped (only the color profile and DPI stay).
+  or `-o path`. Metadata is stripped. The PNG keeps only image-format data (palette,
+  transparency, color profile, gamma, DPI). Text, EXIF and other chunks are dropped.
 
 Requires macOS 14+ and Swift 6 (Xcode or Command Line Tools).
 

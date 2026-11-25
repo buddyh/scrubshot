@@ -25,7 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Fail-closed verification: the output is re-read by OCR at 1x and 2x, and no
   file is written if a rule term is still readable. Exit code 2 reports the leak.
   `--keep-failed` writes an `-UNSAFE` file for debugging.
-- Metadata stripping: only the color profile and DPI are kept.
+- Metadata stripping: the PNG keeps only image-format chunks (palette,
+  transparency, color profile, gamma, DPI). Text, EXIF and other chunks are dropped.
 - `--report` writes a JSON file beside the output with each replacement, box,
   font, color and fit. `--json` and `--dry-run` support agent workflows.
 - Deterministic output: the same image and rules give byte-identical PNG and
