@@ -113,6 +113,14 @@ public final class LocalHTTPServer: @unchecked Sendable {
     public struct Limits {
         /// Open connections. More than this get an immediate 503.
         public var maxConnections = 128
+        /// Handler calls running at once for ordinary requests. A handler counts until it returns,
+        /// not until it responds.
+        public var maxConcurrent = 8
+        /// Handler calls running at once for requests `isHeavy` picks. This is a separate lane, so
+        /// slow requests cannot starve the rest: at most `maxConcurrent + maxHeavy` handlers run in total.
+        public var maxHeavy = 3
+        /// Parsed requests waiting for a free slot, per lane. More than this get a 503.
+        public var maxQueued = 256
         /// Seconds a client may stay silent before the request is complete.
         public var readTimeout: TimeInterval = 10
         public init() {}
@@ -128,9 +136,18 @@ public final class LocalHTTPServer: @unchecked Sendable {
     private let work = DispatchQueue(label: "scrubshot.http.work", attributes: .concurrent)
     private let lock = NSLock()
     private var openConnections = 0
+    private let normalLane: Lane
+    private let heavyLane: Lane
     private var listener: NWListener?
     /// The bound port. Set by `start`.
     public private(set) var port: Int
+
+    private final class Lane {
+        let max: Int
+        var active = 0
+        var pending: [() -> Void] = []
+        init(max: Int) { self.max = max }
+    }
 
     private final class Conn {
         let nw: NWConnection
@@ -149,6 +166,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
         self.limits = limits
         self.isHeavy = isHeavy
         self.handler = asyncHandler
+        self.normalLane = Lane(max: max(1, limits.maxConcurrent))
+        self.heavyLane = Lane(max: max(1, limits.maxHeavy))
     }
 
     /// A handler that answers before it returns.
@@ -233,7 +252,35 @@ public final class LocalHTTPServer: @unchecked Sendable {
     }
 
     private func dispatch(_ req: HTTPRequest, on c: Conn) {
-        work.async { [self] in handler(req) { [self] response in send(c, response) } }
+        let lane = isHeavy(req) ? heavyLane : normalLane
+        let job: () -> Void = { [self] in handler(req) { [self] response in send(c, response) } }
+        lock.lock()
+        if lane.active < lane.max {
+            lane.active += 1
+            lock.unlock()
+            run(lane, job)
+        } else if lane.pending.count < limits.maxQueued {
+            lane.pending.append(job)
+            lock.unlock()
+        } else {
+            lock.unlock()
+            send(c, Self.failure(503, "server busy"))
+        }
+    }
+
+    private func run(_ lane: Lane, _ job: @escaping () -> Void) {
+        work.async { [self] in
+            job()
+            lock.lock()
+            if lane.pending.isEmpty {
+                lane.active -= 1
+                lock.unlock()
+            } else {
+                let next = lane.pending.removeFirst()
+                lock.unlock()
+                run(lane, next)
+            }
+        }
     }
 
     private static func failure(_ status: Int, _ message: String) -> HTTPResponse {
