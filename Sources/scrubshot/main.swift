@@ -49,6 +49,37 @@ EXIT CODES
 """
 
 struct CLIError: Error { let message: String }
+/// A file could not be found, read or written.
+struct IOFailure: Error { let message: String }
+
+/// Stable machine-readable error codes: usage, rules, image_decode, image_encode, ocr, io, leak.
+func classify(_ e: Error) -> (code: String, message: String) {
+    switch e {
+    case let e as CLIError: return ("usage", e.message)
+    case let e as IOFailure: return ("io", e.message)
+    case let e as ScrubError:
+        let code: String
+        switch e {
+        case .usage: code = "usage"
+        case .rules: code = "rules"
+        case .imageDecode: code = "image_decode"
+        case .imageEncode: code = "image_encode"
+        case .ocr: code = "ocr"
+        }
+        return (code, e.description)
+    case is CocoaError, is POSIXError: return ("io", (e as NSError).localizedDescription)
+    default: return ("io", "\(e)")
+    }
+}
+
+func requireReadable(_ path: String) throws {
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+        throw IOFailure(message: "no such file: \(path)")
+    }
+    guard FileManager.default.isReadableFile(atPath: path) else { throw IOFailure(message: "cannot read \(path)") }
+}
+
 final class Args {
     var items: [String]
     init(_ a: [String]) { items = a }
@@ -203,6 +234,7 @@ func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> Audi
 func audit(_ c: Config) throws -> Int32 {
     guard c.inputs.count == 1 else { throw CLIError(message: "audit takes exactly one image") }
     let path = c.inputs[0]
+    try requireReadable(path)
     let result = try auditImage(path, rules: try buildRules(c), ocrScale: c.ocrScale)
     let out = result.lines
     if c.json {
@@ -231,6 +263,8 @@ struct FileResult: Codable {
     var leaks: [Leak]
     var warnings: [String]
     var error: String?
+    /// Stable code for `error` (usage, rules, image_decode, image_encode, ocr, io) or "leak".
+    var errorCode: String?
 }
 
 func outputPath(for input: String, explicit: String?, suffix: String = "-scrubbed") -> String {
@@ -254,6 +288,7 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
     do {
         let out = outputPath(for: input, explicit: c.output)
         if samePath(out, input) { throw CLIError(message: "refusing to overwrite the input \(input)") }
+        try requireReadable(input)
         let loaded = try ImageFile.load(URL(fileURLWithPath: input))
         let result = try Scrubber.scrub(loaded.image, options: ScrubOptions(
             rules: rules, ocrScale: c.ocrScale, verifyScales: c.verifyScales))
@@ -269,6 +304,7 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
             }
         } else {
             r.status = "leak"
+            r.errorCode = "leak"
             if c.keepFailed && !c.dryRun {
                 let unsafe = outputPath(for: input, explicit: nil, suffix: "-scrubbed-UNSAFE")
                 if !samePath(unsafe, input) {
@@ -283,10 +319,10 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet) -> FileResult {
             r.report = rp
             try encode(r).write(toFile: rp, atomically: true, encoding: .utf8)
         }
-    } catch let e as CLIError {
-        r.error = e.message
     } catch {
-        r.error = "\(error)"
+        let (code, message) = classify(error)
+        r.error = message
+        r.errorCode = code
     }
     return r
 }
@@ -351,10 +387,13 @@ do {
     default:
         exit(try scrub(try parse(args)))
     }
-} catch let e as CLIError {
-    stderr("scrubshot: \(e.message)")
-    exit(1)
 } catch {
-    stderr("scrubshot: \(error)")
+    let (code, message) = classify(error)
+    stderr("scrubshot: \(message)")
+    // Under --json a failed run still gives a parseable answer on stdout.
+    if CommandLine.arguments.contains("--json"), !["serve"].contains(CommandLine.arguments.dropFirst().first) {
+        struct Failure: Encodable { struct Body: Encodable { let code: String; let message: String }; let error: Body }
+        if let out = try? encode(Failure(error: .init(code: code, message: message))) { print(out) }
+    }
     exit(1)
 }
