@@ -1,7 +1,6 @@
 # Releasing scrubshot
 
-This checklist covers a tagged release and the one-time steps before the
-repository is made public.
+This checklist covers a tagged release.
 
 ## Release checklist
 
@@ -41,40 +40,3 @@ repository is made public.
 8. **Create the GitHub release.** Create a release from tag `vX.Y.Z`, paste the
    changelog section as the notes, and attach the binary and the `.sha256`
    file. Put the SHA-256 value in the notes as well.
-
-## Before making the repo public
-
-This repository is private, and its early history holds test strings that were
-later replaced with made-up names. Do not make it public. The public release
-comes from `buddyh/scrubshot-release` (private until launch), which has the same
-commits with those strings rewritten, ending on the same tree as `main` here.
-
-- **(a) Sync the release repository.** The rewrite is deterministic, so each
-  sync is a fast-forward. The replacement list names the real strings, so it
-  lives outside the repo at `~/.config/scrubshot/release-replace.txt` (one
-  `old==>new` per line, git-filter-repo format):
-  ```sh
-  SRC="$PWD"   # run from this repo's main checkout
-  rm -rf /tmp/scrubshot-sync
-  git clone --no-local --single-branch --branch main "$SRC" /tmp/scrubshot-sync
-  cd /tmp/scrubshot-sync
-  git filter-repo --force \
-    --replace-text ~/.config/scrubshot/release-replace.txt \
-    --replace-message ~/.config/scrubshot/release-replace.txt
-  test "$(git rev-parse HEAD^{tree})" = "$(git -C "$SRC" rev-parse main^{tree})"
-  git push --tags git@github.com:buddyh/scrubshot-release.git main
-  ```
-  The `test` line stops the sync if the rewritten tree differs from this repo's
-  `main` (a replacement hit current files). `--tags` carries release tags
-  (rewritten with the commits). Then scan the release history (b). At launch, make `scrubshot-release` public (rename it
-  if wanted) and archive this one.
-- **(b) Scan for secrets and real names.** Run gitleaks on the release
-  repository's full history, and search it for real company, client, and people
-  names:
-  ```sh
-  gitleaks git --no-banner --redact .
-  ```
-  Fix every finding. Do not allow an exception without a reason in the commit.
-- **(c) Confirm the images are synthetic.** Check every image in `docs/` and
-  every fixture under `Tests/Fixtures/`. They must be generated from made-up
-  text. Do not publish an image that came from a real screenshot.
