@@ -80,8 +80,7 @@ public final class Bitmap {
     }
 
     public func makeImage() throws -> CGImage {
-        let provider = CGDataProvider(data: Data(data) as CFData)!
-        guard let img = CGImage(
+        guard let provider = CGDataProvider(data: Data(data) as CFData), let img = CGImage(
             width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
             bytesPerRow: width * 4, space: colorSpace,
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
