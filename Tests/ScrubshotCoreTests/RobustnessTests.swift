@@ -197,6 +197,16 @@ final class RobustnessTests: XCTestCase {
         XCTAssertEqual(props?[kCGImagePropertyDPIWidth] as? Double ?? 0, 144, accuracy: 0.01)
     }
 
+    func testLoadFromDataMatchesLoadFromFile() throws {
+        let url = try write(source(), type: .png, name: "bytes.png", props: [kCGImagePropertyDPIWidth: 144.0, kCGImagePropertyDPIHeight: 144.0])
+        let fromFile = try ImageFile.load(url)
+        let fromData = try ImageFile.load(data: Data(contentsOf: url), name: "bytes.png")
+        XCTAssertEqual(try Bitmap(image: fromData.image).data, try Bitmap(image: fromFile.image).data)
+        XCTAssertEqual(fromData.dpi?.0 ?? 0, 144, accuracy: 0.01)
+        XCTAssertThrowsError(try ImageFile.load(data: Data(), name: "empty.png"))
+        XCTAssertThrowsError(try ImageFile.load(data: Data("not an image".utf8), name: "junk.png"))
+    }
+
     func testMetadataStripped() throws {
         let props: [CFString: Any] = [
             kCGImagePropertyExifDictionary: [kCGImagePropertyExifUserComment: "secret note"],
