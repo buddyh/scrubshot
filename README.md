@@ -154,7 +154,9 @@ scrubshot serve ~/Screenshots --open      # http://127.0.0.1:7317
   ask first), the page shows a "waiting for access" banner instead of hanging.
   Allow access in the prompt and it recovers by itself.
 
-The server listens on 127.0.0.1 only and rejects other Host headers. Writes need
+The server listens on 127.0.0.1 only. It accepts the Host headers
+`127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name (with any
+port), and rejects all others. Writes need
 an `X-Scrubshot: 1` header, and file names can't leave the folder. It uses the
 same rules and options as `scrub`, and the same fail-closed check: a leak writes no
 output.
