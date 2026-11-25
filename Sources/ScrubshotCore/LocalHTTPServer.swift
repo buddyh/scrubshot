@@ -113,9 +113,11 @@ public final class LocalHTTPServer: @unchecked Sendable {
     public struct Limits {
         /// Open connections. More than this get an immediate 503.
         public var maxConnections = 128
-        /// Handler calls running at once. A handler counts until it returns, not until it responds.
+        /// Handler calls running at once for ordinary requests. A handler counts until it returns,
+        /// not until it responds.
         public var maxConcurrent = 8
-        /// Handler calls running at once for requests `isHeavy` picks, so slow ones cannot starve the rest.
+        /// Handler calls running at once for requests `isHeavy` picks. This is a separate lane, so
+        /// slow requests cannot starve the rest: at most `maxConcurrent + maxHeavy` handlers run in total.
         public var maxHeavy = 3
         /// Parsed requests waiting for a free slot, per lane. More than this get a 503.
         public var maxQueued = 256
