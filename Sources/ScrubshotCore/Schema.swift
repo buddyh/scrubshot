@@ -13,8 +13,11 @@ public enum RulesSchema {
         let rule: [String: Any] = [
             "type": "object",
             "additionalProperties": false,
-            "description": "One rule. Give exactly one of term, terms or regex.",
-            "anyOf": [["required": ["term"]], ["required": ["terms"]], ["required": ["regex"]]],
+            "description": "One rule. Give term and/or terms, or a regex, but not both kinds.",
+            "oneOf": [
+                ["anyOf": [["required": ["term"]], ["required": ["terms"]]], "not": ["required": ["regex"]]],
+                ["required": ["regex"], "not": ["anyOf": [["required": ["term"]], ["required": ["terms"]]]]],
+            ],
             "properties": [
                 "term": ["type": "string", "minLength": 1, "description": "Literal text to replace."],
                 "terms": ["type": "array", "items": ["type": "string", "minLength": 1], "minItems": 1,
