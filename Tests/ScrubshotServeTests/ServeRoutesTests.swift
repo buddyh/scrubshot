@@ -123,6 +123,16 @@ final class ServeRoutesTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1, "opening a FIFO blocked")
     }
 
+    func testOversizedFileIsNotRead() throws {
+        try write("big.png")
+        let fd = open(dir + "/big.png", O_WRONLY)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        XCTAssertEqual(ftruncate(fd, ServeApp.maxReadBytes + 1), 0)   // sparse, so no real disk use
+        close(fd)
+        XCTAssertNil(app.readPlainFile("big.png"))
+        XCTAssertEqual(app.handle(req("/api/thumb", query: ["name": "big.png"])).status, 404)
+    }
+
     func testUploadDoesNotWriteThroughPlantedSymlink() throws {
         let target = outside + "/target.png"
         try FileManager.default.createSymbolicLink(atPath: dir + "/a.png", withDestinationPath: target)
