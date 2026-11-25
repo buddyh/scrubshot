@@ -185,7 +185,7 @@ binds 127.0.0.1; only requests carrying that Host header are added.
    CoreText glyph offsets, snapped to a fully blank pixel column.
 3. **Measure.** The background is the most common color around the word. The ink
    box is found by trimming and growing the Vision box. Each candidate font
-   (SF Pro in four weights, SF Mono, Helvetica Neue, Menlo) is sized to the ink
+   (SF Pro in four weights, SF Mono in three, Helvetica Neue in two, and Menlo) is sized to the ink
    width, aligned by coverage centroid to a quarter pixel, and scored by how well
    its rendered coverage explains the real pixels.
 4. **Agree.** Edits of similar size share one font (the lowest total error), and
