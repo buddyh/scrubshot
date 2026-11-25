@@ -26,8 +26,9 @@ network:
   `127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name, and
   rejects all others. Writes need a custom `X-Scrubshot` header, and file
   names cannot leave the chosen folder.
-- `--host-alias` adds one extra Host header for a local reverse proxy. It does
-  not make the server reachable from the network by itself.
+- `--host-alias` adds one extra Host header name for a local reverse proxy. You
+  can repeat it, one per name. It does not make the server reachable from the
+  network by itself.
 
 Issues in the scope above are in scope for this policy. Issues in a reverse
 proxy, a browser, or macOS are out of scope and should go to those projects.

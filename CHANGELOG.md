@@ -31,8 +31,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Deterministic output: the same image and rules give byte-identical PNG and
   JSON.
 - `serve` web UI for one folder, bound to 127.0.0.1 only, with side-by-side and
-  slider comparisons, edit outlines, and OCR overlays. `--host-alias` adds one
-  extra Host header for a local reverse proxy.
+  slider comparisons, edit outlines, and OCR overlays. `--host-alias` (repeatable)
+  adds an extra Host header name for a local reverse proxy.
 - Agent skill (`skill/scrubshot`) and `make install-skill` to link it into
   Claude Code.
 - Candidate lists: `"replace": ["Relay", "Beacon"]` picks the candidate whose
