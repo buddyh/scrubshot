@@ -2,6 +2,7 @@ import Foundation
 import ScrubshotCore
 
 let version = "0.1.0"
+let cliVersion = version
 
 let usage = """
 scrubshot \(version) - replace sensitive text in screenshots, locally
@@ -168,7 +169,7 @@ func stderr(_ s: String) { FileHandle.standardError.write((s + "\n").data(using:
 struct AuditSpan: Codable { let text: String; let box: PixelRect; let confidence: Double }
 struct AuditMatch: Codable { let text: String; let replacement: String; let rule: String }
 struct AuditLine: Codable { let text: String; let box: PixelRect; let spans: [AuditSpan]; let matches: [AuditMatch] }
-struct AuditResult: Codable { let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
+struct AuditResult: Codable { let schemaVersion: Int; let version: String; let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
 
 /// OCR one image and mark the spans the rules match.
 func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
@@ -180,7 +181,7 @@ func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> Audi
                                                  confidence: (Double($0.piece.confidence) * 100).rounded() / 100) },
                   matches: rules.matches(in: l.text).map { AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule) })
     }
-    return AuditResult(image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
+    return AuditResult(schemaVersion: jsonSchemaVersion, version: cliVersion, image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
 }
 
 func audit(_ c: Config) throws -> Int32 {
@@ -204,6 +205,8 @@ func audit(_ c: Config) throws -> Int32 {
 // MARK: scrub
 
 struct FileResult: Codable {
+    var schemaVersion: Int? = jsonSchemaVersion
+    var version: String? = cliVersion
     let input: String
     var output: String?
     var report: String?
