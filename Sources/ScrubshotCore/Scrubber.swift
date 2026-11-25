@@ -52,10 +52,25 @@ struct PlannedEdit {
     var line: String
 }
 
+/// Opt-in per-phase timing: SCRUBSHOT_TIMING=1 prints milliseconds to stderr.
+enum Timing {
+    static let enabled = ProcessInfo.processInfo.environment["SCRUBSHOT_TIMING"] != nil
+
+    static func measure<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
+        guard enabled else { return try body() }
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+            FileHandle.standardError.write(String(format: "[timing] %@ %.0f ms\n", phase, ms).data(using: .utf8)!)
+        }
+        return try body()
+    }
+}
+
 public enum Scrubber {
     public static func scrub(_ image: CGImage, options: ScrubOptions) throws -> ScrubResult {
         let bmp = try Bitmap(image: image)
-        let pieces = try OCR.recognize(image, scale: options.ocrScale)
+        let pieces = try Timing.measure("ocr") { try OCR.recognize(image, scale: options.ocrScale) }
         let lines = OCR.lines(pieces)
         let plan = planEdits(lines: lines, rules: options.rules)
 
@@ -64,8 +79,17 @@ public enum Scrubber {
             EditRequest(box: e.piece.box(for: e.range), originalText: (e.piece.text as NSString).substring(with: e.range),
                         keepPrefix: e.keepPrefix, newText: e.newText)
         }
-        let analyses = requests.map { Renderer.analyze($0, in: bmp) }
-        let choices = consensus(analyses)
+        let analyses = Timing.measure("analyze") {
+            var slots = [Renderer.Analysis?](repeating: nil, count: requests.count)
+            slots.withUnsafeMutableBufferPointer { buf in
+                guard let base = buf.baseAddress else { return }
+                DispatchQueue.concurrentPerform(iterations: requests.count) { i in
+                    (base + i).pointee = Renderer.analyze(requests[i], in: bmp)
+                }
+            }
+            return slots
+        }
+        let choices = Timing.measure("consensus") { consensus(analyses) }
         if ProcessInfo.processInfo.environment["SCRUBSHOT_DEBUG"] != nil {
             for (i, a) in analyses.enumerated() {
                 guard let a else { continue }
@@ -74,13 +98,22 @@ public enum Scrubber {
             }
         }
 
+        let tDraw = DispatchTime.now().uptimeNanoseconds
+        // Placement only reads the analysis, so it runs concurrently; drawing stays in order.
+        var placed = [Renderer.Fit?](repeating: nil, count: plan.count)
+        placed.withUnsafeMutableBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            DispatchQueue.concurrentPerform(iterations: plan.count) { i in
+                if let a = analyses[i], let c = choices[i] { (base + i).pointee = Renderer.place(a, fontName: c.0, size: c.1) }
+            }
+        }
         var records: [ReplacementRecord] = []
         var warnings: [String] = []
         var redrawn: [PixelRect] = []
         for (i, e) in plan.enumerated() {
             let from = requests[i].originalText
             var result: EditResult?
-            if let a = analyses[i], let c = choices[i], let f = Renderer.place(a, fontName: c.0, size: c.1) {
+            if let a = analyses[i], let f = placed[i] {
                 result = Renderer.draw(a, fit: f, into: bmp)
             }
             let to = (from as NSString).substring(to: e.keepPrefix) + e.newText
@@ -97,9 +130,12 @@ public enum Scrubber {
                 warnings.append("\"\(from)\": skipped, no text pixels found in the OCR box")
             }
         }
+        if Timing.enabled {
+            FileHandle.standardError.write(String(format: "[timing] place+draw %.0f ms\n", Double(DispatchTime.now().uptimeNanoseconds - tDraw) / 1e6).data(using: .utf8)!)
+        }
         let out = try bmp.makeImage()
-        let leaks = try verify(out, rules: options.rules, originals: records.map(\.original),
-                               redrawn: redrawn, scales: options.verifyScales)
+        let leaks = try Timing.measure("verify") { try verify(out, rules: options.rules, originals: records.map(\.original),
+                               redrawn: redrawn, scales: options.verifyScales) }
         return ScrubResult(image: out, replacements: records, leaks: leaks, warnings: warnings)
     }
 
@@ -216,24 +252,39 @@ public enum Scrubber {
     /// reports near-misses of the replaced originals (one edit away).
     public static func verify(_ image: CGImage, rules: RuleSet, originals: [String], redrawn: [PixelRect],
                               scales: [Double]) throws -> [Leak] {
-        var leaks: [Leak] = []
         let fuzzyTerms = Set(originals.map { Rule.fold($0) }.filter { $0.count >= 4 }).sorted()
-        for scale in scales {
-            let lines = OCR.lines(try OCR.recognize(image, scale: scale))
-            for line in lines {
-                for m in rules.matches(in: line.text) {
-                    leaks.append(Leak(text: m.original, line: line.text, rule: m.rule,
-                                      box: PixelRect(boxFor(line, m.range)), ocrScale: scale))
+        // Scales are independent; run them together and join in scale order.
+        var perScale = [Result<[Leak], Error>?](repeating: nil, count: scales.count)
+        perScale.withUnsafeMutableBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            DispatchQueue.concurrentPerform(iterations: scales.count) { i in
+                (base + i).pointee = Result {
+                    try verifyScale(image, scale: scales[i], rules: rules, fuzzyTerms: fuzzyTerms, redrawn: redrawn)
                 }
-                for part in line.parts {
-                    let pbox = PixelRect(part.piece.box)
-                    guard redrawn.contains(where: { $0.intersects(pbox) }) else { continue }
-                    let folded = Rule.fold(part.piece.text)
-                    for t in fuzzyTerms where containsNear(folded, t) {
-                        if leaks.contains(where: { $0.line == line.text && $0.ocrScale == scale && Rule.fold($0.text) == t }) { continue }
-                        leaks.append(Leak(text: t, line: line.text, rule: "near-match of a replaced term",
-                                          box: pbox, ocrScale: scale))
-                    }
+            }
+        }
+        var leaks: [Leak] = []
+        for r in perScale { leaks += try r!.get() }
+        return leaks
+    }
+
+    private static func verifyScale(_ image: CGImage, scale: Double, rules: RuleSet, fuzzyTerms: [String],
+                                    redrawn: [PixelRect]) throws -> [Leak] {
+        var leaks: [Leak] = []
+        let lines = OCR.lines(try Timing.measure("verify ocr x\(scale)") { try OCR.recognize(image, scale: scale) })
+        for line in lines {
+            for m in rules.matches(in: line.text) {
+                leaks.append(Leak(text: m.original, line: line.text, rule: m.rule,
+                                  box: PixelRect(boxFor(line, m.range)), ocrScale: scale))
+            }
+            for part in line.parts {
+                let pbox = PixelRect(part.piece.box)
+                guard redrawn.contains(where: { $0.intersects(pbox) }) else { continue }
+                let folded = Rule.fold(part.piece.text)
+                for t in fuzzyTerms where containsNear(folded, t) {
+                    if leaks.contains(where: { $0.line == line.text && $0.ocrScale == scale && Rule.fold($0.text) == t }) { continue }
+                    leaks.append(Leak(text: t, line: line.text, rule: "near-match of a replaced term",
+                                      box: pbox, ocrScale: scale))
                 }
             }
         }

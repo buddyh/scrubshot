@@ -82,6 +82,15 @@ final class ScrubTests: XCTestCase {
         XCTAssertTrue(leaks.contains { $0.text.contains("acme-billing-api") })
     }
 
+    func testImageWithNoMatchesComesBackUnchanged() throws {
+        let img = Fixtures.image(Fixtures.light, scale: 1)
+        let rules = try RuleSet.build(files: [RulesFile(rules: [.init(term: "Zzyzzx", replace: "Qqq")])])
+        let result = try Scrubber.scrub(img, options: ScrubOptions(rules: rules))
+        XCTAssertTrue(result.replacements.isEmpty)
+        XCTAssertTrue(result.leaks.isEmpty)
+        XCTAssertEqual(try Bitmap(image: img).data, try Bitmap(image: result.image).data)
+    }
+
     func testFailsClosedWhenReplacementStillMatches() throws {
         let img = Fixtures.image(Fixtures.light, scale: 2)
         // The replacement contains the term, so the term stays readable.
