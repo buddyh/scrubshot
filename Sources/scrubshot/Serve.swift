@@ -4,6 +4,11 @@ import ScrubshotCore
 
 // `scrubshot serve`: a local web UI over a folder of screenshots. See the contract for the API.
 
+// Globals the serve routes read live here, not in main.swift: top-level values in main.swift are only set
+// once the script runs, so a test that imports the module would see them uninitialized.
+let version = "0.1.0"
+let defaultRulesPath = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".config/scrubshot/rules.json").path
 let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "tif", "gif", "bmp"]
 let maxRequestBody = 64 * 1024 * 1024
 
@@ -73,10 +78,10 @@ final class ThumbCache: @unchecked Sendable {
     }
 }
 
-/// Downscale an image file so its longest side is at most `maxPixel`, encoded as PNG. Nil when unreadable.
-func makeThumbnail(path: String, maxPixel: Int) -> Data? {
+/// Downscale image bytes so its longest side is at most `maxPixel`, encoded as PNG. Nil when unreadable.
+func makeThumbnail(data: Data, maxPixel: Int) -> Data? {
     let srcOpts = [kCGImageSourceShouldCache: false] as CFDictionary
-    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, srcOpts) else { return nil }
+    guard let src = CGImageSourceCreateWithData(data as CFData, srcOpts) else { return nil }
     let opts: [CFString: Any] = [
         kCGImageSourceCreateThumbnailFromImageAlways: true,
         kCGImageSourceCreateThumbnailWithTransform: true,
@@ -117,8 +122,6 @@ final class ServeApp: @unchecked Sendable {
     private let rulesJSON: String
     private let versionJSON: String
     private let workspaceJSON: String
-    /// The workspace folder with symlinks resolved, computed once.
-    private let rootReal: String
 
     init(root: String, config: Config, rules: RuleSet, sources: [String], port: Int) {
         self.root = root
@@ -126,7 +129,6 @@ final class ServeApp: @unchecked Sendable {
         self.rules = rules
         self.sources = sources
         self.port = port
-        self.rootReal = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
         self.rulesJSON = (try? serveEncode(ServeRules(count: rules.rules.count, sources: sources))) ?? "{}"
         self.versionJSON = (try? serveEncode(version)) ?? "\"\""
         self.workspaceJSON = (try? serveEncode(root)) ?? "\"\""
@@ -158,10 +160,27 @@ final class ServeApp: @unchecked Sendable {
 
     func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: path(name)) }
 
-    /// True when the file is a regular file that really lives in the workspace (symlinks may not leave it).
-    func insideWorkspace(_ name: String) -> Bool {
-        let real = URL(fileURLWithPath: path(name)).resolvingSymlinksInPath().deletingLastPathComponent().path
-        return real == rootReal
+    /// True when the entry is a regular file itself. Symlinks are refused, even ones that stay inside the folder.
+    func isPlainFile(_ name: String) -> Bool {
+        var st = stat()
+        return lstat(path(name), &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+    }
+
+    /// Largest workspace file the server reads into memory (thumbnails, audits, scrubs, image views).
+    static let maxReadBytes: off_t = 256 << 20
+
+    /// Read a regular file without following a symlink at the final path. The check and the read use one
+    /// descriptor, so swapping the entry for a symlink after a listing cannot redirect the read.
+    func readPlainFile(_ name: String) -> Data? {
+        // O_NONBLOCK so a FIFO or device entry can't hang the worker before fstat rejects it.
+        let fd = open(path(name), O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        if fd < 0 { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= Self.maxReadBytes else { return nil }
+        // Read at most one byte past the cap, so a file that grows after fstat is still refused.
+        let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readData(ofLength: Int(Self.maxReadBytes) + 1)
+        return data.count > Int(Self.maxReadBytes) ? nil : data
     }
 
     func outputName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil) as NSString).lastPathComponent }
@@ -170,19 +189,15 @@ final class ServeApp: @unchecked Sendable {
 
     // MARK: state
 
-    /// Result of `stat` (follows symlinks): modification time in ms, size, and whether it is a directory.
-    struct FileInfo { let mtimeMs: Int64; let size: Int64; let isDir: Bool }
+    /// Result of `lstat` (does not follow symlinks): modification time in ms, size, and whether it is a directory.
+    struct FileInfo { let mtimeMs: Int64; let size: Int64; let isDir: Bool; let isRegular: Bool }
 
     static func fileInfo(_ path: String) -> FileInfo? {
         var st = stat()
-        guard stat(path, &st) == 0 else { return nil }
+        guard lstat(path, &st) == 0 else { return nil }
         let ms = Int64(st.st_mtimespec.tv_sec) * 1000 + Int64(st.st_mtimespec.tv_nsec) / 1_000_000
-        return FileInfo(mtimeMs: ms, size: Int64(st.st_size), isDir: (st.st_mode & S_IFMT) == S_IFDIR)
-    }
-
-    static func isSymlink(_ path: String) -> Bool {
-        var st = stat()
-        return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+        return FileInfo(mtimeMs: ms, size: Int64(st.st_size), isDir: (st.st_mode & S_IFMT) == S_IFDIR,
+                        isRegular: (st.st_mode & S_IFMT) == S_IFREG)
     }
 
     /// The folder could not be listed in time, usually because macOS is waiting for the user to allow access.
@@ -242,11 +257,8 @@ final class ServeApp: @unchecked Sendable {
         var keep = Set<String>()
         for name in all where isInputName(name) && !name.hasPrefix(".") {
             let inPath = path(name)
-            // Only a symlink can point out of the workspace, so only it pays for path resolution.
-            if Self.isSymlink(inPath) {
-                guard insideWorkspace(name) else { continue }
-            }
-            guard let inInfo = Self.fileInfo(inPath), !inInfo.isDir else { continue }
+            // Symlinks are never listed: lstat reports the link itself, which is not a regular file.
+            guard let inInfo = Self.fileInfo(inPath), inInfo.isRegular else { continue }
             keep.insert(name)
 
             let stem = (name as NSString).deletingPathExtension
@@ -260,7 +272,7 @@ final class ServeApp: @unchecked Sendable {
                 let rsig = "\(repInfo.mtimeMs)|\(repInfo.size)"
                 if let hit = reportCache[rep], hit.sig == rsig { report = hit.report }
                 else {
-                    if let data = FileManager.default.contents(atPath: path(rep)) { report = try? JSONDecoder().decode(FileResult.self, from: data) }
+                    if let data = readPlainFile(rep) { report = try? JSONDecoder().decode(FileResult.self, from: data) }
                     reportCache[rep] = (rsig, report)
                 }
             } else {
@@ -342,7 +354,9 @@ final class ServeApp: @unchecked Sendable {
         defer { lock.lock(); running = nil; generation += 1; lock.unlock() }
 
         let input = path(name)
-        guard isInputName(name), exists(name) else { setError(name, "input file is gone"); return }
+        // Read once through readPlainFile and scrub those bytes, so the entry can't be swapped for a symlink
+        // between the check and the decode.
+        guard isInputName(name), let bytes = readPlainFile(name) else { setError(name, "input file is gone"); return }
         guard !rules.rules.isEmpty else { setError(name, "no rules: pass --rules, --replace or --term, or add \(defaultRulesPath)"); return }
         // Remove this item's own earlier results so a failed re-run never leaves a stale output behind.
         for f in [outputName(name), unsafeName(name), reportName(name)] { try? FileManager.default.removeItem(atPath: path(f)) }
@@ -354,7 +368,7 @@ final class ServeApp: @unchecked Sendable {
         c.json = false
         c.dryRun = false
         c.keepFailed = false
-        var r = scrubOne(input, c, rules)
+        var r = scrubOne(input, c, rules, data: bytes)
         if r.status == "error" {
             setError(name, r.error ?? "unknown error")
             if r.report == nil {   // scrubOne writes no report on early errors; write one so the UI can show it
@@ -372,9 +386,8 @@ final class ServeApp: @unchecked Sendable {
     /// Audit one input on the job queue, cached by (name, size, mtime). Calls `done` when the audit finishes;
     /// the calling thread is not held while OCR runs.
     func audit(_ name: String, done: @escaping (Result<String, Error>) -> Void) {
-        let attrs: [FileAttributeKey: Any]
-        do { attrs = try FileManager.default.attributesOfItem(atPath: path(name)) } catch { done(.failure(error)); return }
-        let key = "\(attrs[.size] ?? 0)|\(attrs[.modificationDate] ?? Date.distantPast)"
+        guard isPlainFile(name), let info = Self.fileInfo(path(name)) else { done(.failure(CLIError(message: "no such image"))); return }
+        let key = "\(info.size)|\(info.mtimeMs)"
         lock.lock()
         if let hit = auditCache[name], hit.key == key { lock.unlock(); done(.success(hit.json)); return }
         auditsPending += 1
@@ -389,7 +402,10 @@ final class ServeApp: @unchecked Sendable {
             if let hit, hit.key == key {
                 result = .success(hit.json)
             } else {
-                result = Result { try encode(try auditImage(self.path(name), rules: self.rules, ocrScale: self.config.ocrScale)) }
+                result = Result {
+                    guard let bytes = self.readPlainFile(name) else { throw CLIError(message: "no such image") }
+                    return try encode(try auditImage(self.path(name), data: bytes, rules: self.rules, ocrScale: self.config.ocrScale))
+                }
                 if case .success(let json) = result {
                     self.lock.lock(); self.auditCache[name] = (key, json); self.lock.unlock()
                 }
@@ -403,11 +419,10 @@ final class ServeApp: @unchecked Sendable {
 
     /// A small PNG of an input image, cached by (name, size, mtime, width).
     func thumbnail(_ name: String, width: Int) -> Data? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path(name)) else { return nil }
-        let mtime = Int64(((attrs[.modificationDate] as? Date) ?? .distantPast).timeIntervalSince1970 * 1000)
-        let key = "\(name)|\(attrs[.size] ?? 0)|\(mtime)|\(width)"
+        guard let info = Self.fileInfo(path(name)), info.isRegular else { return nil }
+        let key = "\(name)|\(info.size)|\(info.mtimeMs)|\(width)"
         if let hit = thumbs.get(key) { return hit }
-        guard let data = makeThumbnail(path: path(name), maxPixel: width) else { return nil }
+        guard let bytes = readPlainFile(name), let data = makeThumbnail(data: bytes, maxPixel: width) else { return nil }
         thumbs.put(key, data)
         return data
     }
@@ -419,7 +434,7 @@ final class ServeApp: @unchecked Sendable {
         let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
         for n in 1...10_000 {
             let candidate = n == 1 ? name : "\(stem)-\(n).\(ext)"
-            let fd = open(path(candidate), O_WRONLY | O_CREAT | O_EXCL, 0o644)
+            let fd = open(path(candidate), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
             if fd < 0 {
                 if errno == EEXIST { continue }
                 throw CLIError(message: "cannot save \(candidate): \(String(cString: strerror(errno)))")
@@ -458,7 +473,7 @@ final class ServeApp: @unchecked Sendable {
         let host = (req.headers["host"] ?? "").lowercased()
         guard allowedHost(host) else { respond(fail(403, "bad Host header")); return }
         guard let name = validName(req.query["name"]), isInputName(name) else { respond(fail(400, "bad name")); return }
-        guard exists(name), insideWorkspace(name) else { respond(fail(404, "no such image")); return }
+        guard isPlainFile(name) else { respond(fail(404, "no such image")); return }
         audit(name) { [self] result in
             switch result {
             case .success(let json): respond(noStore(.json(json)))
@@ -483,9 +498,8 @@ final class ServeApp: @unchecked Sendable {
                 r.headers["ETag"] = st.etag
                 return noStore(r)
             case ("GET", "/api/image"):
-                guard let name = validName(req.query["name"]) else { return fail(400, "bad name") }
-                guard isImageName(name), exists(name), insideWorkspace(name),
-                      let data = FileManager.default.contents(atPath: path(name)) else { return fail(404, "no such image") }
+                guard let name = validName(req.query["name"]), isImageName(name) else { return fail(400, "bad name") }
+                guard let data = readPlainFile(name) else { return fail(404, "no such image") }
                 return noStore(.data(data, contentType: mimeType(name)))
             case ("GET", "/api/thumb"):
                 guard let name = validName(req.query["name"]), isImageName(name) else { return fail(400, "bad name") }
@@ -494,7 +508,7 @@ final class ServeApp: @unchecked Sendable {
                     guard let n = Int(w), n >= 16, n <= 512 else { return fail(400, "bad w: use 16...512") }
                     width = n
                 }
-                guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
+                guard isPlainFile(name) else { return fail(404, "no such image") }
                 guard let data = thumbnail(name, width: width) else { return fail(404, "cannot read image") }
                 var r = HTTPResponse.data(data, contentType: "image/png")
                 r.headers["Cache-Control"] = "private, max-age=3600"
@@ -511,7 +525,7 @@ final class ServeApp: @unchecked Sendable {
                 var names: [String]
                 if req.query["name"] != nil {
                     guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
-                    guard exists(name), insideWorkspace(name) else { return fail(404, "no such image") }
+                    guard isPlainFile(name) else { return fail(404, "no such image") }
                     names = [name]
                 } else {
                     names = try newNames()
