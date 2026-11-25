@@ -49,7 +49,6 @@ EXIT CODES
 """
 
 struct CLIError: Error { let message: String }
-
 final class Args {
     var items: [String]
     init(_ a: [String]) { items = a }
@@ -166,10 +165,22 @@ func stderr(_ s: String) { FileHandle.standardError.write((s + "\n").data(using:
 
 // MARK: audit
 
-struct AuditSpan: Codable { let text: String; let box: PixelRect; let confidence: Double }
-struct AuditMatch: Codable { let text: String; let replacement: String; let rule: String }
+struct AuditSpan: Codable {
+    let text: String; let box: PixelRect; let confidence: Double
+    /// Height of the span's text line in pixels, and the font size that line most likely
+    /// has. Use them to judge how wide a replacement can be.
+    let lineHeight: Int; let estFontSize: Double
+}
+struct AuditMatch: Codable {
+    let text: String; let replacement: String; let rule: String
+    let category: String?; let candidates: [String]?
+}
 struct AuditLine: Codable { let text: String; let box: PixelRect; let spans: [AuditSpan]; let matches: [AuditMatch] }
 struct AuditResult: Codable { let schemaVersion: Int; let version: String; let image: String; let width: Int; let height: Int; let lines: [AuditLine] }
+
+/// Vision's text box is a little taller than the font size; this ratio comes from system-font
+/// screenshots and is an estimate, good to about a point.
+func estimateFontSize(lineHeight: Double) -> Double { (lineHeight / 1.2 * 2).rounded() / 2 }
 
 /// OCR one image and mark the spans the rules match.
 func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> AuditResult {
@@ -178,8 +189,13 @@ func auditImage(_ path: String, rules: RuleSet, ocrScale: Double) throws -> Audi
     let out = lines.map { l in
         AuditLine(text: l.text, box: PixelRect(l.box),
                   spans: l.parts.map { AuditSpan(text: $0.piece.text, box: PixelRect($0.piece.box),
-                                                 confidence: (Double($0.piece.confidence) * 100).rounded() / 100) },
-                  matches: rules.matches(in: l.text).map { AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule) })
+                                                 confidence: (Double($0.piece.confidence) * 100).rounded() / 100,
+                                                 lineHeight: PixelRect($0.piece.box).height,
+                                                 estFontSize: estimateFontSize(lineHeight: $0.piece.box.height)) },
+                  matches: rules.matches(in: l.text).map {
+                      AuditMatch(text: $0.original, replacement: $0.replacement, rule: $0.rule,
+                                 category: $0.category, candidates: $0.candidates)
+                  })
     }
     return AuditResult(schemaVersion: jsonSchemaVersion, version: cliVersion, image: path, width: loaded.image.width, height: loaded.image.height, lines: out)
 }
