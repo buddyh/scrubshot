@@ -123,6 +123,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
         public var maxQueued = 256
         /// Seconds a client may stay silent before the request is complete.
         public var readTimeout: TimeInterval = 10
+        /// Seconds a client has to send the whole request, however steadily the bytes arrive.
+        public var requestDeadline: TimeInterval = 30
         /// Seconds a response may take to send before the connection is dropped (a client that stops reading).
         public var writeTimeout: TimeInterval = 30
         public init() {}
@@ -153,6 +155,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     private final class Conn {
         let nw: NWConnection
+        let opened = DispatchTime.now()
         var timer: DispatchWorkItem?
         var closed = false
         var counted = true
@@ -226,12 +229,14 @@ public final class LocalHTTPServer: @unchecked Sendable {
         receive(c, Data())
     }
 
-    /// Close the connection with a 408 when the client goes quiet before sending a whole request.
+    /// Close the connection with a 408 when the client goes quiet, or takes too long overall, to send a whole request.
     private func arm(_ c: Conn) {
         c.timer?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.send(c, Self.failure(408, "request timed out")) }
         c.timer = item
-        queue.asyncAfter(deadline: .now() + limits.readTimeout, execute: item)
+        let idle = DispatchTime.now() + limits.readTimeout
+        let overall = c.opened + limits.requestDeadline
+        queue.asyncAfter(deadline: min(idle, overall), execute: item)
     }
 
     private func receive(_ c: Conn, _ buffer: Data) {
