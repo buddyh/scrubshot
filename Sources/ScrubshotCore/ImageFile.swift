@@ -12,21 +12,66 @@ public enum ImageFile {
         public let dpi: (Double, Double)?
     }
 
+    /// Largest image we accept, in pixels. The working buffer is 4 bytes per pixel and
+    /// the pipeline keeps a few copies, so 100 MP is roughly 1.5 GB of memory.
+    public static let maxPixels = 100_000_000
+
+    /// True when width x height is positive and within `maxPixels`, without overflowing.
+    public static func pixelCountAllowed(_ w: Int, _ h: Int) -> Bool {
+        guard w > 0, h > 0 else { return false }
+        let (n, overflow) = w.multipliedReportingOverflow(by: h)
+        return !overflow && n <= maxPixels
+    }
+
+    /// Reads the first (and only) frame. EXIF orientation is applied to the pixels, so
+    /// the output, which carries no EXIF, looks the same as the input did.
+    /// Multi-frame files (animated GIF, multi-page TIFF) are refused, not truncated.
     public static func load(_ url: URL) throws -> Loaded {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
-            throw ScrubError.imageDecode(url.path)
+        let path = url.path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
+            throw ScrubError.imageDecode("\(path) does not exist")
         }
-        guard CGImageSourceGetCount(src) >= 1,
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            throw ScrubError.imageDecode("\(url.path) has no image")
+        if isDir.boolValue { throw ScrubError.imageDecode("\(path) is a directory, not an image file") }
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            throw ScrubError.imageDecode("\(path) is not readable (check file permissions)")
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
+        if size == 0 { throw ScrubError.imageDecode("\(path) is empty") }
+
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            throw ScrubError.imageDecode("\(path) is not a supported image (PNG, JPEG, HEIC, TIFF, GIF, ...)")
+        }
+        guard CGImageSourceGetStatus(src) == .statusComplete || CGImageSourceGetStatus(src) == .statusIncomplete,
+              CGImageSourceGetCount(src) >= 1 else {
+            throw ScrubError.imageDecode("\(path) has no readable image")
+        }
+        let frames = CGImageSourceGetCount(src)
+        if frames > 1 {
+            throw ScrubError.imageDecode("\(path) has \(frames) frames (animated or multi-page); only single-image files are supported")
+        }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        if let w = props?[kCGImagePropertyPixelWidth] as? Int, let h = props?[kCGImagePropertyPixelHeight] as? Int,
+           w > 0, h > 0, !pixelCountAllowed(w, h) {
+            throw ScrubError.imageDecode("\(path) is \(w)x\(h), over the \(maxPixels / 1_000_000) megapixels limit")
+        }
+        guard let decoded = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            throw ScrubError.imageDecode("\(path) could not be decoded (damaged or unsupported)")
+        }
+        if !pixelCountAllowed(decoded.width, decoded.height) {
+            throw ScrubError.imageDecode("\(path) is \(decoded.width)x\(decoded.height), over the \(maxPixels / 1_000_000) megapixels limit")
         }
         var dpi: (Double, Double)?
-        if let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-           let dx = props[kCGImagePropertyDPIWidth] as? Double,
-           let dy = props[kCGImagePropertyDPIHeight] as? Double {
+        if let dx = props?[kCGImagePropertyDPIWidth] as? Double, let dy = props?[kCGImagePropertyDPIHeight] as? Double {
             dpi = (dx, dy)
         }
-        return Loaded(image: img, dpi: dpi)
+        var image = decoded
+        let orientation = (props?[kCGImagePropertyOrientation] as? UInt32) ?? 1
+        if (2...8).contains(orientation) {
+            image = try Bitmap(image: decoded).oriented(orientation).makeImage()
+            if orientation >= 5, let d = dpi { dpi = (d.1, d.0) }
+        }
+        return Loaded(image: image, dpi: dpi)
     }
 
     public static func pngData(_ image: CGImage, dpi: (Double, Double)?) throws -> Data {
@@ -80,6 +125,18 @@ public enum ImageFile {
 
     public static func writePNG(_ image: CGImage, dpi: (Double, Double)?, to url: URL) throws {
         let data = try pngData(image, dpi: dpi)
-        try data.write(to: url, options: .atomic)
+        let dir = url.deletingLastPathComponent().path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else {
+            throw ScrubError.imageEncode("output folder does not exist: \(dir)")
+        }
+        guard FileManager.default.isWritableFile(atPath: dir) else {
+            throw ScrubError.imageEncode("output folder is not writable: \(dir)")
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw ScrubError.imageEncode("could not save \(url.path): \((error as NSError).localizedDescription)")
+        }
     }
 }

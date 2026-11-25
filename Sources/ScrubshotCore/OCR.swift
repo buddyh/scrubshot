@@ -59,6 +59,8 @@ public enum OCR {
     public static func recognize(_ image: CGImage, scale: Double = 1) throws -> [OCRPiece] {
         let size = CGSize(width: image.width, height: image.height)
         let input = scale == 1 ? image : try upscale(image, scale)
+        // Vision rejects images of 2 pixels or less in a dimension; none of those can hold text.
+        if input.width <= 2 || input.height <= 2 { return [] }
         let request = VNRecognizeTextRequest()
         request.revision = VNRecognizeTextRequestRevision3
         request.recognitionLevel = .accurate

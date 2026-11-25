@@ -43,6 +43,9 @@ public final class Bitmap {
         } else {
             space = CGColorSpace(name: CGColorSpace.sRGB)!
         }
+        guard ImageFile.pixelCountAllowed(image.width, image.height) else {
+            throw ScrubError.imageDecode("image is \(image.width)x\(image.height), over the \(ImageFile.maxPixels / 1_000_000) megapixels limit")
+        }
         self.init(width: image.width, height: image.height, colorSpace: space)
         let ok = data.withUnsafeMutableBytes { buf -> Bool in
             guard let ctx = CGContext(
@@ -80,14 +83,42 @@ public final class Bitmap {
     }
 
     public func makeImage() throws -> CGImage {
-        let provider = CGDataProvider(data: Data(data) as CFData)!
-        guard let img = CGImage(
+        guard let provider = CGDataProvider(data: Data(data) as CFData), let img = CGImage(
             width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
             bytesPerRow: width * 4, space: colorSpace,
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
         ) else { throw ScrubError.imageEncode("could not build an image from the bitmap") }
         return img
+    }
+
+    /// Applies an EXIF orientation (2...8) by moving whole pixels, so nothing is resampled.
+    public func oriented(_ orientation: UInt32) -> Bitmap {
+        guard (2...8).contains(orientation) else { return self }
+        let swap = orientation >= 5
+        let out = Bitmap(width: swap ? height : width, height: swap ? width : height, colorSpace: colorSpace)
+        let w = width, h = height
+        data.withUnsafeBytes { src in
+            out.data.withUnsafeMutableBytes { dst in
+                let s = src.bindMemory(to: UInt32.self), d = dst.bindMemory(to: UInt32.self)
+                for y in 0..<h {
+                    for x in 0..<w {
+                        let nx: Int, ny: Int
+                        switch orientation {
+                        case 2: (nx, ny) = (w - 1 - x, y)
+                        case 3: (nx, ny) = (w - 1 - x, h - 1 - y)
+                        case 4: (nx, ny) = (x, h - 1 - y)
+                        case 5: (nx, ny) = (y, x)
+                        case 6: (nx, ny) = (h - 1 - y, x)
+                        case 7: (nx, ny) = (h - 1 - y, w - 1 - x)
+                        default: (nx, ny) = (y, w - 1 - x)
+                        }
+                        d[ny * out.width + nx] = s[y * w + x]
+                    }
+                }
+            }
+        }
+        return out
     }
 
     /// Pixel rectangle clamped to the bitmap.
