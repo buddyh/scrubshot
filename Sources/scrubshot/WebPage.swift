@@ -106,6 +106,7 @@ svg.i { width: 14px; height: 14px; flex: none; }
 .rail-filter { padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .rail-filter input { width: 100%; font: inherit; color: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
 .rail-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-more { padding: 10px; text-align: center; }
 .rail-list { flex: 1; min-height: 0; overflow: auto; }
 .rail-foot { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .rail-empty { padding: 18px 12px; color: var(--muted); line-height: 1.5; }
@@ -331,6 +332,7 @@ const S = {
   edits: store.get('edits', '1') === '1',
   slider: 50,
   filter: '',
+  limit: 100,
   audits: new Map(),
   online: true
 };
@@ -368,6 +370,7 @@ function toast(msg) {
 const imgUrl = (name, v) => '/api/image?name=' + enc(name) + '&v=' + enc(v == null ? '' : v);
 const thumbUrl = (name, v) => '/api/thumb?name=' + enc(name) + '&w=160&v=' + enc(v == null ? '' : v);
 const items = () => (S.data && S.data.items) || [];
+const PAGE = 100;
 // Items the filter box lets through: every word must match the name or the status.
 function visibleItems() {
   const words = S.filter.toLowerCase().split(/\s+/).filter(Boolean);
@@ -438,7 +441,8 @@ function makeRow(name) {
 }
 function renderRail() {
   const list = $('#list');
-  const its = visibleItems();
+  const vis = visibleItems();
+  const its = vis.slice(0, S.limit);
   if (!its.length) {
     rows.clear();
     list.replaceChildren(h('div', { class: 'rail-empty' }, items().length
@@ -473,12 +477,29 @@ function renderRail() {
   for (const [name, r] of rows) {
     if (!seen.has(name)) { r.el.remove(); rows.delete(name); }
   }
+  if (vis.length > its.length) {
+    ordered.push(h('div', { class: 'rail-more' }, h('button', { type: 'button', onclick: showMore },
+      'Show more (' + (vis.length - its.length) + ' left)')));
+  }
   const cur = Array.from(list.children);
   if (cur.length !== ordered.length || cur.some((e, i) => e !== ordered[i])) list.replaceChildren(...ordered);
 }
 
+function showMore() {
+  S.limit += PAGE;
+  renderRail();
+}
+$('#list').addEventListener('scroll', (e) => {
+  const l = e.currentTarget;
+  // The rail scrolls down on wide screens and sideways in the narrow layout; only an axis that overflows counts.
+  const down = l.scrollHeight > l.clientHeight && l.scrollHeight - l.scrollTop - l.clientHeight < 300;
+  const side = l.scrollWidth > l.clientWidth && l.scrollWidth - l.scrollLeft - l.clientWidth < 300;
+  const nearEnd = down || side;
+  if (nearEnd && visibleItems().length > S.limit) showMore();
+}, { passive: true });
 $('#filter').addEventListener('input', (e) => {
   S.filter = e.target.value;
+  S.limit = PAGE;
   $('#list').scrollTop = 0;
   renderHeader();
   renderRail();
@@ -487,6 +508,8 @@ $('#filter').addEventListener('input', (e) => {
 function select(name) {
   if (S.sel === name) return;
   S.sel = name;
+  const idx = visibleItems().findIndex((x) => x.name === name);
+  if (idx >= S.limit) S.limit = idx + PAGE;
   renderRail();
   renderMain();
   const r = rows.get(name);
