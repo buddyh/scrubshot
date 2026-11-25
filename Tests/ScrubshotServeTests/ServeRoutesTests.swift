@@ -152,6 +152,13 @@ final class ServeRoutesTests: XCTestCase {
         XCTAssertNotEqual(before.version, after.version)
     }
 
+    func testScrubWithoutNameQueuesNothing() throws {
+        try write("a.png")
+        XCTAssertEqual(app.handle(req("POST", "/api/scrub")).status, 400)
+        XCTAssertNotNil(app.handle(req("/api/state")))
+        XCTAssertFalse(app.handle(req("/api/state")).body.contains(Data("queued".utf8)))
+    }
+
     func testUploadDoesNotWriteThroughPlantedSymlink() throws {
         let target = outside + "/target.png"
         try FileManager.default.createSymbolicLink(atPath: dir + "/a.png", withDestinationPath: target)

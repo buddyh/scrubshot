@@ -131,7 +131,8 @@ final class ServeApp: @unchecked Sendable {
         self.port = port
         self.rulesJSON = (try? serveEncode(ServeRules(count: rules.rules.count, sources: sources))) ?? "{}"
         self.versionJSON = (try? serveEncode(version)) ?? "\"\""
-        self.workspaceJSON = (try? serveEncode(root)) ?? "\"\""
+        // Shown in the page header; "~" keeps the user name out of screenshots of the page.
+        self.workspaceJSON = (try? serveEncode((root as NSString).abbreviatingWithTildeInPath)) ?? "\"\""
     }
 
     // MARK: names and files
@@ -304,12 +305,6 @@ final class ServeApp: @unchecked Sendable {
             reportCache = reportCache.filter { reps.contains($0.key) }
         }
         return fragments.sorted { a, b in a.mtime != b.mtime ? a.mtime > b.mtime : a.name < b.name }
-    }
-
-    /// Names of inputs with status "new".
-    func newNames() throws -> [String] {
-        let names = try listNames()
-        return try stateLock.withLock { try itemFragments(names).filter { $0.status == "new" }.map(\.name) }
     }
 
     /// The state JSON and its ETag. Computed at most once per `stateTTL` unless a job changed something.
@@ -527,16 +522,11 @@ final class ServeApp: @unchecked Sendable {
                 enqueueScrub(saved)
                 return .json(try serveEncode(["name": saved]))
             case ("POST", "/api/scrub"):
-                var names: [String]
-                if req.query["name"] != nil {
-                    guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
-                    guard isPlainFile(name) else { return fail(404, "no such image") }
-                    names = [name]
-                } else {
-                    names = try newNames()
-                }
-                for n in names { enqueueScrub(n) }
-                return .json(try serveEncode(["queued": names]))
+                // One named image per request. There is no "scrub the whole folder" route on purpose.
+                guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
+                guard isPlainFile(name) else { return fail(404, "no such image") }
+                enqueueScrub(name)
+                return .json(try serveEncode(["queued": [name]]))
             default:
                 let known = ["/", "/api/state", "/api/image", "/api/thumb", "/api/audit", "/api/upload", "/api/scrub"]
                 return known.contains(req.path) ? fail(405, "method not allowed") : fail(404, "not found")

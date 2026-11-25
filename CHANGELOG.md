@@ -33,7 +33,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   JSON.
 - `serve` web UI for one folder, bound to 127.0.0.1 only, with side-by-side and
   slider comparisons, edit outlines, and OCR overlays. `--host-alias` (repeatable)
-  adds an extra Host header name for a local reverse proxy.
+  adds an extra Host header name for a local reverse proxy. It scrubs one image
+  at a time (dropped on the page, or Scrub on the one you are viewing); it has no
+  whole-folder action.
 - Agent skill (`skill/scrubshot`) and `make install-skill` to link it into
   Claude Code.
 - Candidate lists: `"replace": ["Relay", "Beacon"]` picks the candidate whose
