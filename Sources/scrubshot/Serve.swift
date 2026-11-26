@@ -269,8 +269,8 @@ final class ServeApp: @unchecked Sendable {
 
             let stem = (name as NSString).deletingPathExtension
             let outName = stem + "-scrubbed.png", unsafe = stem + "-scrubbed-UNSAFE.png", rep = stem + "-scrubbed.report.json"
-            let outInfo = present.contains(outName) ? Self.fileInfo(path(outName)) : nil
-            let unsafeInfo = present.contains(unsafe) ? Self.fileInfo(path(unsafe)) : nil
+            var outInfo = present.contains(outName) ? Self.fileInfo(path(outName)) : nil
+            var unsafeInfo = present.contains(unsafe) ? Self.fileInfo(path(unsafe)) : nil
             let repInfo = present.contains(rep) ? Self.fileInfo(path(rep)) : nil
 
             var report: FileResult?
@@ -283,6 +283,10 @@ final class ServeApp: @unchecked Sendable {
                 }
             } else {
                 reportCache[rep] = nil
+            }
+            // shot.png and shot.jpg share output names. Results whose report names another input are not this item's.
+            if let r = report, (r.input as NSString).lastPathComponent != name {
+                report = nil; outInfo = nil; unsafeInfo = nil
             }
             var status = report?.status ?? (errorsNow[name] != nil ? "error" : "new")
             if runningNow == name { status = "running" } else if queuedNow.contains(name) { status = "queued" }
