@@ -373,7 +373,9 @@ final class ServeApp: @unchecked Sendable {
         if let other = outputSibling(name) { setError(name, "\(other) has the same output names; rename one"); return }
         guard !rules.rules.isEmpty else { setError(name, "no rules: pass --rules, --replace or --term, or add \(defaultRulesPath)"); return }
         // Remove this item's own earlier results so a failed re-run never leaves a stale output behind.
-        for f in [outputName(name), unsafeName(name), reportName(name)] { try? FileManager.default.removeItem(atPath: path(f)) }
+        // unlink removes a file or a symlink itself and refuses a directory, so a folder that happens to have one of
+        // these names is never emptied.
+        for f in [outputName(name), unsafeName(name), reportName(name)] { _ = unlink(path(f)) }
 
         var c = config
         c.inputs = [input]
