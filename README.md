@@ -47,6 +47,18 @@ found, add the folder to your PATH, for example
 The first run after a reboot can take a while (about 30s) while Vision loads its
 models. After that a screenshot takes under a second.
 
+### First run
+
+scrubshot needs rules before it scrubs anything; with none it stops with an
+error. Try it on a test image with the example rules, then copy them as a start
+for your own:
+
+```sh
+scrubshot Tests/Fixtures/light@2x.png -r examples/rules.example.json -o /tmp/try.png
+mkdir -p ~/.config/scrubshot
+cp examples/rules.example.json "$(scrubshot rules-path)"   # then edit in your own terms
+```
+
 ## Use
 
 ```sh
