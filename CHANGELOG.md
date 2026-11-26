@@ -36,6 +36,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   adds an extra Host header name for a local reverse proxy. It scrubs one image
   at a time (dropped on the page, or Scrub on the one you are viewing); it has no
   whole-folder action.
+- Output collision checks: `scrub` refuses a batch where one file's output would
+  replace another input or two inputs share an output (`shot.png` and
+  `shot.jpg`), and `serve` refuses to scrub an image whose output names another
+  image in the folder also uses. `serve` takes rule options only.
 - Agent skill (`skill/scrubshot`) and `make install-skill` to link it into
   Claude Code.
 - Candidate lists: `"replace": ["Relay", "Beacon"]` picks the candidate whose
