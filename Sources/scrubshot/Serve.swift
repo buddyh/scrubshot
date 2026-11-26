@@ -184,6 +184,15 @@ final class ServeApp: @unchecked Sendable {
         return data.count > Int(Self.maxReadBytes) ? nil : data
     }
 
+    /// Another input in the folder whose outputs have the same names as this one's (`shot.png` and `shot.jpg`),
+    /// compared case-insensitively. Scrubbing either would replace the other's results.
+    func outputSibling(_ name: String) -> String? {
+        let stem = (name as NSString).deletingPathExtension.lowercased()
+        return (try? listNames())?.first { other in
+            other != name && isInputName(other) && (other as NSString).deletingPathExtension.lowercased() == stem
+        }
+    }
+
     func outputName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil) as NSString).lastPathComponent }
     func unsafeName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil, suffix: "-scrubbed-UNSAFE") as NSString).lastPathComponent }
     func reportName(_ input: String) -> String { (reportPath(for: outputPath(for: path(input), explicit: nil)) as NSString).lastPathComponent }
@@ -361,6 +370,7 @@ final class ServeApp: @unchecked Sendable {
         // Read once through readPlainFile and scrub those bytes, so the entry can't be swapped for a symlink
         // between the check and the decode.
         guard isInputName(name), let bytes = readPlainFile(name) else { setError(name, "input file is gone"); return }
+        if let other = outputSibling(name) { setError(name, "\(other) has the same output names; rename one"); return }
         guard !rules.rules.isEmpty else { setError(name, "no rules: pass --rules, --replace or --term, or add \(defaultRulesPath)"); return }
         // Remove this item's own earlier results so a failed re-run never leaves a stale output behind.
         for f in [outputName(name), unsafeName(name), reportName(name)] { try? FileManager.default.removeItem(atPath: path(f)) }
@@ -529,6 +539,7 @@ final class ServeApp: @unchecked Sendable {
                 // One named image per request. There is no "scrub the whole folder" route on purpose.
                 guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
                 guard isPlainFile(name) else { return fail(404, "no such image") }
+                if let other = outputSibling(name) { return fail(409, "\(other) has the same output names; rename one") }
                 enqueueScrub(name)
                 return .json(try serveEncode(["queued": [name]]))
             default:
