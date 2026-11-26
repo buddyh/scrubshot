@@ -360,7 +360,7 @@ func checkOutputCollisions(_ c: Config) throws {
 func scrub(_ c: Config) throws -> Int32 {
     guard !c.inputs.isEmpty else { throw CLIError(message: "no input images\n\n" + usage) }
     if c.output != nil && c.inputs.count > 1 { throw CLIError(message: "-o works with one input only") }
-    try checkOutputCollisions(c)
+    if !c.dryRun { try checkOutputCollisions(c) }   // a dry run writes nothing, so it can't collide
     let rules = try buildRules(c)
     if rules.rules.isEmpty { throw CLIError(message: "no rules: add \(defaultRulesPath), or pass --rules, --replace or --term") }
     var results: [FileResult] = []
