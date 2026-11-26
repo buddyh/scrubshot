@@ -614,6 +614,10 @@ func runServe(_ args: Args) throws -> Int32 {
     }
     let c = try parse(Args(rest))
     guard c.inputs.count <= 1 else { throw CLIError(message: "serve takes one folder") }
+    // The page always writes the output and its report next to the input, so these scrub options don't apply.
+    if c.output != nil || c.report || c.json || c.dryRun || c.keepFailed {
+        throw CLIError(message: "serve takes the rule options only, not -o, --report, --json, --dry-run or --keep-failed")
+    }
     let folder = (((c.inputs.first ?? ".") as NSString).expandingTildeInPath)
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else {
