@@ -331,9 +331,36 @@ func scrubOne(_ input: String, _ c: Config, _ rules: RuleSet, data: Data? = nil)
     return r
 }
 
+/// Refuse a batch, before anything is written, when one file's outputs would replace another input
+/// (`shot.png` and `shot-scrubbed.png`) or two inputs would write the same output (`shot.png` and `shot.jpg`).
+/// Paths compare case-insensitively, as on a default macOS volume.
+func checkOutputCollisions(_ c: Config) throws {
+    func key(_ p: String) -> String {
+        URL(fileURLWithPath: (p as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path.lowercased()
+    }
+    var inputs: [String: String] = [:]
+    for input in c.inputs { inputs[key(input)] = inputs[key(input)] ?? input }
+    var owner: [String: String] = [:]
+    for input in c.inputs {
+        let out = outputPath(for: input, explicit: c.output)
+        let unsafe = outputPath(for: input, explicit: nil, suffix: "-scrubbed-UNSAFE")
+        for p in [out, reportPath(for: out), unsafe, reportPath(for: unsafe)] {
+            let k = key(p)
+            if let other = inputs[k] {
+                throw CLIError(message: "\(input) would write over the input \(other); rename one")
+            }
+            if let prev = owner[k], key(prev) != key(input) {
+                throw CLIError(message: "\(prev) and \(input) would write the same file \(p); rename one")
+            }
+            owner[k] = input
+        }
+    }
+}
+
 func scrub(_ c: Config) throws -> Int32 {
     guard !c.inputs.isEmpty else { throw CLIError(message: "no input images\n\n" + usage) }
     if c.output != nil && c.inputs.count > 1 { throw CLIError(message: "-o works with one input only") }
+    try checkOutputCollisions(c)
     let rules = try buildRules(c)
     if rules.rules.isEmpty { throw CLIError(message: "no rules: add \(defaultRulesPath), or pass --rules, --replace or --term") }
     var results: [FileResult] = []
