@@ -184,6 +184,16 @@ final class ServeApp: @unchecked Sendable {
         return data.count > Int(Self.maxReadBytes) ? nil : data
     }
 
+    /// Another input in the folder whose outputs have the same names as this one's (`shot.png` and `shot.jpg`),
+    /// compared case-insensitively. Scrubbing either would replace the other's results.
+    /// Throws when the folder can't be listed, so a caller never takes "no listing" for "no sibling".
+    func outputSibling(_ name: String) throws -> String? {
+        let stem = (name as NSString).deletingPathExtension.lowercased()
+        return try listNames().first { other in
+            other != name && isInputName(other) && (other as NSString).deletingPathExtension.lowercased() == stem
+        }
+    }
+
     func outputName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil) as NSString).lastPathComponent }
     func unsafeName(_ input: String) -> String { (outputPath(for: path(input), explicit: nil, suffix: "-scrubbed-UNSAFE") as NSString).lastPathComponent }
     func reportName(_ input: String) -> String { (reportPath(for: outputPath(for: path(input), explicit: nil)) as NSString).lastPathComponent }
@@ -269,8 +279,8 @@ final class ServeApp: @unchecked Sendable {
 
             let stem = (name as NSString).deletingPathExtension
             let outName = stem + "-scrubbed.png", unsafe = stem + "-scrubbed-UNSAFE.png", rep = stem + "-scrubbed.report.json"
-            let outInfo = present.contains(outName) ? Self.fileInfo(path(outName)) : nil
-            let unsafeInfo = present.contains(unsafe) ? Self.fileInfo(path(unsafe)) : nil
+            var outInfo = present.contains(outName) ? Self.fileInfo(path(outName)) : nil
+            var unsafeInfo = present.contains(unsafe) ? Self.fileInfo(path(unsafe)) : nil
             let repInfo = present.contains(rep) ? Self.fileInfo(path(rep)) : nil
 
             var report: FileResult?
@@ -283,6 +293,10 @@ final class ServeApp: @unchecked Sendable {
                 }
             } else {
                 reportCache[rep] = nil
+            }
+            // shot.png and shot.jpg share output names. Results whose report names another input are not this item's.
+            if let r = report, (r.input as NSString).lastPathComponent != name {
+                report = nil; outInfo = nil; unsafeInfo = nil
             }
             var status = report?.status ?? (errorsNow[name] != nil ? "error" : "new")
             if runningNow == name { status = "running" } else if queuedNow.contains(name) { status = "queued" }
@@ -357,9 +371,16 @@ final class ServeApp: @unchecked Sendable {
         // Read once through readPlainFile and scrub those bytes, so the entry can't be swapped for a symlink
         // between the check and the decode.
         guard isInputName(name), let bytes = readPlainFile(name) else { setError(name, "input file is gone"); return }
+        do {
+            if let other = try outputSibling(name) { setError(name, "\(other) has the same output names; rename one"); return }
+        } catch {
+            setError(name, "cannot list the folder: \(error)"); return
+        }
         guard !rules.rules.isEmpty else { setError(name, "no rules: pass --rules, --replace or --term, or add \(defaultRulesPath)"); return }
         // Remove this item's own earlier results so a failed re-run never leaves a stale output behind.
-        for f in [outputName(name), unsafeName(name), reportName(name)] { try? FileManager.default.removeItem(atPath: path(f)) }
+        // unlink removes a file or a symlink itself and refuses a directory, so a folder that happens to have one of
+        // these names is never emptied.
+        for f in [outputName(name), unsafeName(name), reportName(name)] { _ = unlink(path(f)) }
 
         var c = config
         c.inputs = [input]
@@ -525,6 +546,7 @@ final class ServeApp: @unchecked Sendable {
                 // One named image per request. There is no "scrub the whole folder" route on purpose.
                 guard let name = validName(req.query["name"]), isInputName(name) else { return fail(400, "bad name") }
                 guard isPlainFile(name) else { return fail(404, "no such image") }
+                if let other = try outputSibling(name) { return fail(409, "\(other) has the same output names; rename one") }
                 enqueueScrub(name)
                 return .json(try serveEncode(["queued": [name]]))
             default:
@@ -597,6 +619,10 @@ func runServe(_ args: Args) throws -> Int32 {
     }
     let c = try parse(Args(rest))
     guard c.inputs.count <= 1 else { throw CLIError(message: "serve takes one folder") }
+    // The page always writes the output and its report next to the input, so these scrub options don't apply.
+    if c.output != nil || c.report || c.json || c.dryRun || c.keepFailed {
+        throw CLIError(message: "serve takes the rule options only, not -o, --report, --json, --dry-run or --keep-failed")
+    }
     let folder = (((c.inputs.first ?? ".") as NSString).expandingTildeInPath)
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else {

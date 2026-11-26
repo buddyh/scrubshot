@@ -186,4 +186,57 @@ final class ServeRoutesTests: XCTestCase {
         XCTAssertEqual(app.handle(req("GET", "/api/upload")).status, 405)
         XCTAssertEqual(app.handle(req("GET", "/nope")).status, 404)
     }
+
+    // MARK: Shared output names
+
+    func item(_ r: HTTPResponse, _ name: String) throws -> [String: Any] {
+        let obj = try JSONSerialization.jsonObject(with: r.body) as! [String: Any]
+        return (obj["items"] as! [[String: Any]]).first { $0["name"] as? String == name }!
+    }
+
+    func testScrubRefusedWhenAnotherImageSharesOutputNames() throws {
+        try write("shot.png")
+        try write("Shot.JPG")
+        let r = app.handle(req("POST", "/api/scrub", query: ["name": "shot.png"]))
+        XCTAssertEqual(r.status, 409)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir)), ["shot.png", "Shot.JPG"])
+    }
+
+    func testResultsShowOnlyOnTheImageThatMadeThem() throws {
+        try write("shot.png")
+        try write("shot.jpg")
+        try write("shot-scrubbed.png")
+        let report = FileResult(input: dir + "/shot.png", status: "ok", replacements: [], leaks: [], warnings: [])
+        try encode(report).write(toFile: dir + "/shot-scrubbed.report.json", atomically: true, encoding: .utf8)
+        let state = app.handle(req("/api/state"))
+        XCTAssertEqual(try item(state, "shot.png")["status"] as? String, "ok")
+        XCTAssertEqual(try item(state, "shot.png")["output"] as? String, "shot-scrubbed.png")
+        XCTAssertEqual(try item(state, "shot.jpg")["status"] as? String, "new")
+        XCTAssertNil(try item(state, "shot.jpg")["output"] as? String)
+    }
+
+    func testRerunNeverRemovesADirectoryWithAnOutputName() throws {
+        var c = Config()
+        c.defaultRules = false
+        c.replaces = [("Globex", "Initech")]
+        app = ServeApp(root: dir, config: c, rules: try buildRules(c), sources: [], port: 7317)
+        try write("shot.png")
+        try FileManager.default.createDirectory(atPath: dir + "/shot-scrubbed.png", withIntermediateDirectories: false)
+        try write("keep.txt", in: dir + "/shot-scrubbed.png", Data("keep".utf8))
+        XCTAssertEqual(app.handle(req("POST", "/api/scrub", query: ["name": "shot.png"])).status, 200)
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline, (try item(app.handle(req("/api/state")), "shot.png")["status"] as? String).map({ ["queued", "running", "new"].contains($0) }) ?? true {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(try item(app.handle(req("/api/state")), "shot.png")["status"] as? String, "error")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir + "/shot-scrubbed.png/keep.txt"))
+    }
+
+    // MARK: Options
+
+    func testServeRefusesOutputOptions() {
+        for flag in [["--dry-run"], ["--report"], ["--json"], ["--keep-failed"], ["-o", "x.png"]] {
+            XCTAssertThrowsError(try runServe(Args(flag + [dir])), flag.joined(separator: " "))
+        }
+    }
 }
