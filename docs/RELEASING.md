@@ -5,7 +5,7 @@ This checklist covers a tagged release.
 ## Release checklist
 
 1. **Bump the version.** Change `let version = "X.Y.Z"` in
-   `Sources/scrubshot/main.swift`. Check that `scrubshot --version` prints the
+   `Sources/scrubshot/Serve.swift`. Check that `scrubshot --version` prints the
    new value after a build.
 2. **Update the changelog.** Move items from Unreleased into a new
    `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md`, and update the link
