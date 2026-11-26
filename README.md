@@ -169,8 +169,12 @@ The server listens on 127.0.0.1 only. It accepts the Host headers
 `127.0.0.1:<port>` and `localhost:<port>`, plus any `--host-alias` name (with any
 port), and rejects all others. Writes need an `X-Scrubshot: 1` header, and file
 names can't leave the folder. Symlinks, FIFOs and other non-regular entries are
-skipped, and files over 256 MB are not read. It uses the same rules and options
-as `scrub`, and the same fail-closed check: a leak writes no output.
+skipped, and files over 256 MB are not read. It uses the same rule options
+as `scrub` (such as `-r`, `--replace`, `--term`, `--emails`, `--urls`, `--ocr-scale`,
+`--verify-scales`) and the same fail-closed check: a leak writes no output.
+Options about where output goes (`-o`, `--report`, `--json`, `--dry-run`,
+`--keep-failed`) are refused, because the page always writes the scrubbed PNG and
+its report next to the input.
 
 The server bounds its own load:
 
