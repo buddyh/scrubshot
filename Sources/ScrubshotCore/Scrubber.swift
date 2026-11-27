@@ -82,7 +82,9 @@ enum Timing {
 public enum Scrubber {
     public static func scrub(_ image: CGImage, options: ScrubOptions) throws -> ScrubResult {
         let bmp = try Bitmap(image: image)
-        let pieces = try Timing.measure("ocr") { try OCR.recognize(image, scale: options.ocrScale) }
+        // OCR the same bitmap the leak check will read. Vision can read the decoded file and the bitmap copy
+        // differently (alpha format), and a term only the leak check sees would make the scrub fail closed.
+        let pieces = try Timing.measure("ocr") { try OCR.recognize(try bmp.makeImage(), scale: options.ocrScale) }
         let lines = OCR.lines(pieces)
         var plan = planEdits(lines: lines, rules: options.rules)
 
