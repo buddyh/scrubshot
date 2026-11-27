@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Small or faint text that the leak check could read but the find pass missed
+  made a scrub fail closed. The find pass now reads the same bitmap as the leak
+  check, and when only the output shows a rule term (Vision reads a line
+  differently once its neighbours change), the output is scrubbed again, up to
+  three passes, before the final check.
+
 ## [0.1.0] - 2026-11-25
 
 ### Added
@@ -66,4 +76,5 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   parallel, about 20-30% faster per screenshot with byte-identical output.
   `SCRUBSHOT_TIMING=1` prints per-phase timings.
 
+[Unreleased]: https://github.com/buddyh/scrubshot/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/buddyh/scrubshot/releases/tag/v0.1.0
