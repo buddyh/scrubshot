@@ -13,7 +13,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   made a scrub fail closed. The find pass now reads the same bitmap as the leak
   check, and when only the output shows a rule term (Vision reads a line
   differently once its neighbours change), the output is scrubbed again, up to
-  three passes, before the final check.
+  four passes, before the final check. Each extra pass reads text at every OCR
+  scale the leak check found a term at.
 
 ## [0.1.0] - 2026-11-25
 

@@ -81,23 +81,34 @@ enum Timing {
 
 public enum Scrubber {
     /// Most passes a scrub makes before it gives up on a leak.
-    static let maxPasses = 3
+    static let maxPasses = 4
 
     /// Vision can read a line differently once the lines around it change, so a rule term may show up only in
     /// the output. When every leak is a plain rule match (not a near-miss of a replacement), the output is
     /// scrubbed again, up to `maxPasses` times. The final image is then checked against everything replaced.
     public static func scrub(_ image: CGImage, options: ScrubOptions) throws -> ScrubResult {
         var (result, redrawn) = try scrubPass(image, options: options)
-        var passes = 1
-        while passes < maxPasses, !result.leaks.isEmpty, result.leaks.allSatisfy({ !$0.rule.hasPrefix("near-match") }) {
-            let (next, more) = try scrubPass(result.image, options: options)
-            if next.replacements.isEmpty { break }   // nothing new to replace, so the leak stands
-            result = ScrubResult(image: next.image, replacements: result.replacements + next.replacements,
-                                 leaks: next.leaks, warnings: result.warnings + next.warnings)
-            redrawn += more
-            passes += 1
+        var passes = 1, repassed = false
+        retry: while passes < maxPasses, !result.leaks.isEmpty,
+                     result.leaks.allSatisfy({ !$0.rule.hasPrefix("near-match") }) {
+            // Look again at every scale the leak check read a term at; the find scale may not see it.
+            var found = false
+            for scale in Set(result.leaks.map(\.ocrScale)).sorted() {
+                guard passes < maxPasses else { break retry }
+                var again = options
+                again.ocrScale = scale
+                let (next, more) = try scrubPass(result.image, options: again)
+                passes += 1
+                guard !next.replacements.isEmpty else { continue }
+                found = true
+                repassed = true
+                result = ScrubResult(image: next.image, replacements: result.replacements + next.replacements,
+                                     leaks: next.leaks, warnings: result.warnings + next.warnings)
+                redrawn += more
+            }
+            if !found { break }   // nothing new to replace, so the leak stands
         }
-        if passes > 1 {
+        if repassed {
             result.leaks = try Timing.measure("verify all") {
                 try verify(result.image, rules: options.rules, originals: result.replacements.map(\.original),
                            redrawn: redrawn, scales: options.verifyScales)
