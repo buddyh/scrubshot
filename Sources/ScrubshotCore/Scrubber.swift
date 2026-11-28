@@ -90,7 +90,10 @@ public enum Scrubber {
         var (result, redrawn) = try scrubPass(image, options: options)
         var passes = 1
         while passes < maxPasses, !result.leaks.isEmpty, result.leaks.allSatisfy({ !$0.rule.hasPrefix("near-match") }) {
-            let (next, more) = try scrubPass(result.image, options: options)
+            // Look again at the scale the leak check read the term at; the find scale may not see it.
+            var again = options
+            again.ocrScale = result.leaks.map(\.ocrScale).min() ?? options.ocrScale
+            let (next, more) = try scrubPass(result.image, options: again)
             if next.replacements.isEmpty { break }   // nothing new to replace, so the leak stands
             result = ScrubResult(image: next.image, replacements: result.replacements + next.replacements,
                                  leaks: next.leaks, warnings: result.warnings + next.warnings)
